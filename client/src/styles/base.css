@@ -1,0 +1,118 @@
+/* ===== 全局基础样式 ===== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font: var(--font-body);
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+h1 { font: var(--font-h1); letter-spacing: -0.5px; }
+h2 { font: var(--font-h2); letter-spacing: -0.3px; }
+h3 { font: var(--font-h3); }
+
+a {
+  color: var(--accent-blue);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+a:hover { color: var(--accent-cyan); }
+
+button {
+  font: var(--font-body);
+  font-family: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: var(--font-body);
+  font-family: inherit;
+  color: var(--text-primary);
+}
+
+::placeholder { color: rgba(139, 149, 176, 0.6); }
+
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* ===== 玻璃滚动条 ===== */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--glass-scrollbar-hover); }
+
+/* ===== 通用容器 ===== */
+.container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: var(--space-11);
+}
+
+/* ===== 入场动画（级联由内联 --delay 控制） ===== */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInFloat {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.95) translateY(10px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes orbBreath {
+  0%, 100% { opacity: var(--orb-opacity, 0.15); }
+  50% { opacity: calc(var(--orb-opacity, 0.15) * 0.65); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulseDot {
+  0%, 100% { box-shadow: 0 0 12px var(--dot-color, var(--accent-blue)); }
+  50% { box-shadow: 0 0 4px var(--dot-color, var(--accent-blue)); }
+}
+
+.fade-in {
+  animation: fadeIn var(--transition-slow) both;
+  animation-delay: var(--delay, 0ms);
+}
+
+/* ===== 文字截断 ===== */
+.clamp-2,
+.clamp-3,
+.clamp-4 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-2 { -webkit-line-clamp: 2; }
+.clamp-3 { -webkit-line-clamp: 3; }
+.clamp-4 { -webkit-line-clamp: 4; }

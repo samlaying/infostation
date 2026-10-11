@@ -1,0 +1,112 @@
+// ===== /api/v1/items — 知识卡片 CRUD + 筛选/搜索/排序 =====
+
+import { Router } from 'express';
+import { db, rowToItem, rowToTodo } from '../db.js';
+import { isValidCategory, isValidContentType, isValidPriority, CATEGORIES, CONTENT_TYPES, PRIORITIES, SOURCE_PLATFORMS } from '../constants.js';
+
+export const itemsRouter = Router();
+
+// ---- 列表（筛选 + 搜索 + 排序 + 分页）----
+itemsRouter.get('/items', (req, res) => {
+  const {
+    category,
+    content_type,
+    priority,
+    platform,
+    tag,
+    has_todo,
+    q,
+    sort = 'time',
+    page = '1',
+    page_size = '24',
+  } = req.query;
+
+  const where = [];
+  const params = {};
+
+  if (isValidCategory(category)) { where.push('i.primary_category = @category'); params.category = category; }
+  if (isValidContentType(content_type)) { where.push('i.content_type = @content_type'); params.content_type = content_type; }
+  if (isValidPriority(priority)) { where.push('i.priority = @priority'); params.priority = priority; }
+  if (SOURCE_PLATFORMS.includes(platform)) { where.push('i.source_platform = @platform'); params.platform = platform; }
+  if (tag) { where.push("i.tags LIKE @tag"); params.tag = `%"${String(tag).replace(/[%_"]/g, '')}"%`; }
+  if (has_todo === 'yes') { where.push('EXISTS (SELECT 1 FROM todos t WHERE t.source_item_id = i.id)'); }
+  if (has_todo === 'no') { where.push('NOT EXISTS (SELECT 1 FROM todos t WHERE t.source_item_id = i.id)'); }
+  if (q) {
+    const kw = `%${String(q).replace(/[%_]/g, '')}%`;
+    where.push('(i.title LIKE @kw OR i.summary LIKE @kw OR i.full_content LIKE @kw OR i.tags LIKE @kw)');
+    params.kw = kw;
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const orderBy =
+    sort === 'priority'
+      ? `CASE i.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, i.created_at DESC`
+      : sort === 'related'
+        ? '(SELECT COUNT(*) FROM item_relations r WHERE r.item_id = i.id) DESC, i.created_at DESC'
+        : 'i.created_at DESC';
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const pageSize = Math.min(60, Math.max(1, parseInt(page_size, 10) || 24));
+
+  const total = db.prepare(`SELECT COUNT(*) AS c FROM items i ${whereSql}`).get(params).c;
+  const rows = db
+    .prepare(
+      `SELECT i.*,
+        (SELECT COUNT(*) FROM todos t WHERE t.source_item_id = i.id) AS todo_count,
+        (SELECT COUNT(*) FROM item_relations r WHERE r.item_id = i.id) AS related_count
+       FROM items i ${whereSql} ORDER BY ${orderBy} LIMIT @limit OFFSET @offset`
+    )
+    .all({ ...params, limit: pageSize, offset: (pageNum - 1) * pageSize });
+
+  res.json({
+    total,
+    page: pageNum,
+    page_size: pageSize,
+    items: rows.map(rowToItem),
+  });
+});
+
+// ---- 详情 ----
+itemsRouter.get('/items/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '信息不存在' });
+  const todos = db.prepare('SELECT * FROM todos WHERE source_item_id = ?').all(req.params.id).map(rowToTodo);
+  const relatedRows = db
+    .prepare(
+      `SELECT i.id, i.title, i.primary_category, i.tags, r.relation_type
+       FROM item_relations r JOIN items i ON i.id = r.related_item_id
+       WHERE r.item_id = ?`
+    )
+    .all(req.params.id)
+    .map((r) => ({ ...r, tags: JSON.parse(r.tags || '[]') }));
+  res.json({ ...rowToItem(row), todos, related_items: relatedRows });
+});
+
+// ---- 编辑（标题/分类/类型/标签/优先级/摘要）----
+itemsRouter.patch('/items/:id', (req, res) => {
+  const row = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '信息不存在' });
+
+  const b = req.body || {};
+  const updates = {};
+  if (typeof b.title === 'string' && b.title.trim()) updates.title = b.title.trim().slice(0, 60);
+  if (typeof b.summary === 'string') updates.summary = b.summary.trim().slice(0, 300);
+  if (isValidCategory(b.primary_category)) updates.primary_category = b.primary_category;
+  if (isValidContentType(b.content_type)) { updates.content_type = b.content_type; updates.secondary_category = b.content_type; }
+  if (isValidPriority(b.priority)) updates.priority = b.priority;
+  if (Array.isArray(b.tags)) updates.tags = JSON.stringify(b.tags.map((t) => String(t).slice(0, 20)).slice(0, 8));
+  if (typeof b.full_content === 'string') updates.full_content = b.full_content;
+
+  if (!Object.keys(updates).length) return res.status(400).json({ error: '没有可更新的字段' });
+
+  const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE items SET ${setSql} WHERE id = @id`).run({ ...updates, id: req.params.id });
+  res.json(rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)));
+});
+
+// ---- 删除（级联删 TODO/关联）----
+itemsRouter.delete('/items/:id', (req, res) => {
+  const info = db.prepare('DELETE FROM items WHERE id = ?').run(req.params.id);
+  if (!info.changes) return res.status(404).json({ error: '信息不存在' });
+  res.json({ ok: true });
+});

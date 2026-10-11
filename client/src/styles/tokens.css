@@ -1,0 +1,86 @@
+/* ===== InfoStation 设计令牌 — guide.md 第十四章速查表全量落地 ===== */
+
+:root {
+  /* ===== COLOR · 背景层（深色模式） ===== */
+  --bg-primary: #0a0e1a;
+  --bg-secondary: #111827;
+
+  /* ===== COLOR · 玻璃层（玻璃拟态） ===== */
+  --glass-bg: rgba(255, 255, 255, 0.05);
+  --glass-bg-faint: rgba(255, 255, 255, 0.03);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-hover: rgba(255, 255, 255, 0.08);
+  --glass-border-hover: rgba(255, 255, 255, 0.15);
+  --glass-border-active: rgba(255, 255, 255, 0.15);
+  --glass-scrollbar-hover: rgba(255, 255, 255, 0.2);
+
+  /* ===== COLOR · 文字层级 ===== */
+  --text-primary: #f0f4ff;
+  --text-secondary: #8b95b0;
+  --text-muted: #4a5268;
+
+  /* ===== COLOR · 功能色 ===== */
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-cyan: #06b6d4;
+  --accent-green: #10b981;
+  --accent-orange: #f59e0b;
+  --accent-pink: #ec4899;
+  --accent-red: #ef4444;
+
+  /* ===== GRADIENT ===== */
+  --gradient-1: linear-gradient(135deg, #3b82f6, #8b5cf6); /* 主按钮/Logo/标题 */
+  --gradient-2: linear-gradient(135deg, #06b6d4, #3b82f6); /* 副按钮/数据顶线 */
+  --gradient-3: linear-gradient(135deg, #8b5cf6, #ec4899); /* 分类标签/统计卡 */
+  --gradient-success: linear-gradient(135deg, #10b981, #06b6d4);
+  --gradient-warning: linear-gradient(135deg, #f59e0b, #ec4899);
+
+  /* ===== RADIUS ===== */
+  --radius-lg: 20px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --radius-xs: 8px;
+  --radius-full: 20px;
+
+  /* ===== SHADOW ===== */
+  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.2);
+  --shadow-glow-blue: 0 4px 20px rgba(59, 130, 246, 0.3);
+
+  /* ===== TYPOGRAPHY =====
+     本地字体栈（离线可用）：Inter → 系统字体 → 中文 PingFang/雅黑 */
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-h1: 700 22px/1.35 var(--font-family);
+  --font-h2: 600 18px/1.4 var(--font-family);
+  --font-h3: 600 16px/1.45 var(--font-family);
+  --font-body: 500 14px/1.6 var(--font-family);
+  --font-secondary: 400 13px/1.7 var(--font-family);
+  --font-caption: 500 12px/1.5 var(--font-family);
+  --font-micro: 400 11px/1.5 var(--font-family);
+
+  /* ===== MOTION ===== */
+  --transition-fast: 200ms ease;
+  --transition-base: 300ms ease;
+  --transition-slow: 500ms ease;
+  --blur-light: 8px;
+  --blur-base: 12px;
+  --blur-heavy: 16px;
+  --blur-orb: 80px;
+
+  /* ===== SPACING ===== */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 12px;
+  --space-6: 14px;
+  --space-7: 16px;
+  --space-8: 18px;
+  --space-9: 20px;
+  --space-10: 22px;
+  --space-11: 24px;
+  --space-12: 28px;
+  --space-13: 32px;
+  --space-14: 40px;
+}

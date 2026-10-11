@@ -1,0 +1,15 @@
+{
+  "name": "infostation",
+  "version": "0.1.0",
+  "description": "InfoStation 信息处理站 — AI 驱动的个人信息处理中枢（前后端分离）",
+  "private": true,
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix client install",
+    "dev": "concurrently -n server,client -c blue,magenta \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "seed": "npm --prefix server run seed",
+    "build": "npm --prefix client run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

@@ -1,0 +1,70 @@
+// ===== API 封装：统一前缀 /api/v1，错误抛出带 message =====
+
+const BASE = '/api/v1';
+
+export class ApiError extends Error {
+  constructor(message, { status, data } = {}) {
+    super(message);
+    this.status = status;
+    this.data = data;
+  }
+}
+
+async function request(path, { method = 'GET', body, params } = {}) {
+  let url = `${BASE}${path}`;
+  if (params) {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ).toString();
+    if (qs) url += `?${qs}`;
+  }
+
+  const res = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* 非 JSON 响应 */
+  }
+
+  if (!res.ok) {
+    throw new ApiError(data?.error || `请求失败（HTTP ${res.status}）`, { status: res.status, data });
+  }
+  return data;
+}
+
+export const api = {
+  get: (path, params) => request(path, { params }),
+  post: (path, body) => request(path, { method: 'POST', body }),
+  patch: (path, body) => request(path, { method: 'PATCH', body }),
+  put: (path, body) => request(path, { method: 'PUT', body }),
+  delete: (path) => request(path, { method: 'DELETE' }),
+};
+
+// ===== 业务接口 =====
+export const processInput = (payload) => api.post('/process', payload);
+export const fetchItems = (params) => api.get('/items', params);
+export const fetchItem = (id) => api.get(`/items/${id}`);
+export const patchItem = (id, body) => api.patch(`/items/${id}`, body);
+export const deleteItem = (id) => api.delete(`/items/${id}`);
+
+export const fetchTodos = (params) => api.get('/todos', params);
+export const createTodo = (body) => api.post('/todos', body);
+export const patchTodo = (id, body) => api.patch(`/todos/${id}`, body);
+export const deleteTodo = (id) => api.delete(`/todos/${id}`);
+
+export const fetchStats = () => api.get('/stats');
+export const fetchWeeklyReport = (refresh) => api.get('/weekly-report', refresh ? { refresh: 1 } : undefined);
+export const fetchWeeklyReports = () => api.get('/weekly-reports');
+export const fetchSettings = () => api.get('/settings');
+export const updateSettings = (body) => api.put('/settings', body);
+
+export const extractUrl = (url) => api.post('/extract', { url });
+export const exportJson = () => api.get('/export');
+export const importJson = (payload) => api.post('/import', payload);
+export const clearAllData = () => api.delete('/data');
