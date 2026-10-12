@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue';
 import { useAppStore } from '../stores/app';
-import { exportJson, importJson, clearAllData } from '../api';
+import { exportJson, importJson, clearAllData, getToken, setToken } from '../api';
 import { CATEGORY_MAP } from '../constants';
 import { toast, toastError, toastSuccess } from '../stores/toast';
 
@@ -11,6 +11,10 @@ const goals = ref([]);
 const savingGoals = ref(false);
 const importing = ref(false);
 const fileInput = ref(null);
+
+const hasToken = ref(Boolean(getToken()));
+const tokenInput = ref('');
+const authRequired = computed(() => Boolean(appStore.settings?.auth_required ?? false));
 
 onMounted(async () => {
   if (!appStore.loaded) await appStore.load();
@@ -89,6 +93,21 @@ async function clearData() {
     toastError(e.message);
   }
 }
+
+function saveToken() {
+  const t = tokenInput.value.trim();
+  if (!t) return toastError('请输入 Token');
+  setToken(t);
+  toastSuccess('Token 已保存，刷新页面生效');
+  hasToken.value = true;
+  tokenInput.value = '';
+}
+
+function removeToken() {
+  setToken('');
+  hasToken.value = false;
+  toast('Token 已清除，刷新页面生效', 'info');
+}
 </script>
 
 <template>
@@ -111,6 +130,17 @@ async function clearData() {
         当前未配置 LLM API Key，信息处理由内置规则引擎完成（关键词分类 + 行动动词 TODO 提取）。
         在 <code>server/.env</code> 中配置 <code>LLM_API_KEY</code>（支持 DeepSeek / Kimi / GLM / OpenAI 等兼容接口）后重启服务，
         即可启用「私秘」Agent 的完整能力：精准摘要、语义分类、智能 TODO 提取与关联建议。
+      </div>
+      <div v-if="authRequired" class="settings__token-row">
+        <span class="settings__desc" style="margin:0">API Token（本实例已启用鉴权）：</span>
+        <input
+          v-model="tokenInput"
+          class="glass-input settings__token-input"
+          :placeholder="hasToken ? '已保存（输入可替换）' : '粘贴 API Token…'"
+          type="password"
+        />
+        <button class="btn btn--glass btn--sm" @click="saveToken">保存</button>
+        <button v-if="hasToken" class="btn btn--danger btn--sm" @click="removeToken">清除</button>
       </div>
     </section>
 
@@ -221,6 +251,15 @@ async function clearData() {
 }
 
 .settings__goals { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-7); }
+
+.settings__token-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+  flex-wrap: wrap;
+}
+.settings__token-input { flex: 1; min-width: 180px; }
 
 .settings__actions { display: flex; gap: var(--space-4); }
 .settings__actions--wrap { flex-wrap: wrap; }

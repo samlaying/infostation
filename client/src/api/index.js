@@ -1,6 +1,20 @@
 // ===== API 封装：统一前缀 /api/v1，错误抛出带 message =====
 
 const BASE = '/api/v1';
+const TOKEN_KEY = 'infostation_token';
+
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY) || '';
+}
+export function setToken(token) {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+/** 401 时通知全局显示 Token 门禁（App.vue 监听） */
+export function notifyAuthRequired() {
+  window.dispatchEvent(new CustomEvent('infostation:auth-required'));
+}
 
 export class ApiError extends Error {
   constructor(message, { status, data } = {}) {
@@ -19,17 +33,23 @@ async function request(path, { method = 'GET', body, params } = {}) {
     if (qs) url += `?${qs}`;
   }
 
-  const res = await fetch(url, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const headers = {};
+  if (body) headers['Content-Type'] = 'application/json';
+  const token = getToken();
+  if (token) headers['X-API-Key'] = token;
+
+  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
 
   let data = null;
   try {
     data = await res.json();
   } catch {
     /* 非 JSON 响应 */
+  }
+
+  if (res.status === 401) {
+    notifyAuthRequired();
+    throw new ApiError('需要 API Token', { status: 401, data });
   }
 
   if (!res.ok) {

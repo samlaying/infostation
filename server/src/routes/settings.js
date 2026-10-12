@@ -11,6 +11,7 @@ settingsRouter.get('/settings', (req, res) => {
   res.json({
     user_goals: getSetting('user_goals', ['career', 'media', 'sidehustle']),
     agent_mode: llmConfigured() ? 'llm' : 'mock',
+    auth_required: Boolean(process.env.API_TOKEN),
     llm: {
       configured: llmConfigured(),
       base_url: process.env.LLM_BASE_URL || 'https://api.deepseek.com',

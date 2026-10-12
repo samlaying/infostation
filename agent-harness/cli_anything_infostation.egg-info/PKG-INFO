@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: cli-anything-infostation
+Version: 0.1.0
+Summary: Agent-native CLI for InfoStation — capture, categorize, and act on information via the InfoStation REST API.
+Author: cli-anything contributors
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Utilities
+Classifier: Intended Audience :: Developers
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Dynamic: author
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: requires-python
+Dynamic: summary
+
+Command-line interface for InfoStation (AI-driven personal information hub). Covers every web UI operation: process inputs (URL/text), manage knowledge cards, TODO board, analytics, weekly reports, backup/import, settings. Pure Python stdlib — zero dependencies.

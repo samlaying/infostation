@@ -63,6 +63,33 @@ LLM_MODEL=deepseek-chat
 - **没配 Key** → 自动降级为内置规则引擎（关键词分类 + 行动动词 TODO 提取），全流程照常可用，顶栏显示「Mock 模式」
 - LLM 调用失败时也会自动降级到规则引擎，不阻断录入
 
+## Agent API（让本机 Agent 操作网页端的一切）
+
+线上实例已启用鉴权。任意 OpenAI 兼容 Agent / CLI / 脚本均可通过 REST API 完成网页全部操作：
+
+```bash
+# 1. 能力自发现（推荐 Agent 首先调用）：返回全部端点+参数+枚举
+curl -H "Authorization: Bearer $TOKEN" http://<服务器IP>:3000/api/v1/agent/capabilities
+
+# 2. 例如录入处理
+curl -X POST http://<服务器IP>:3000/api/v1/process \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"content":"一段文字或URL"}'
+```
+
+**配套 CLI**（[CLI-Anything](https://github.com/HKUDS/CLI-Anything) 规范，零依赖 Python）：`agent-harness/` 目录，
+`cli-anything-infostation` 命令，输出恒为 JSON。本机已安装并注册 skill（`~/.claude/skills/cli-anything-infostation`），
+连接配置存于 `~/.config/infostation-cli/config.json`。
+
+```bash
+cli-anything-infostation agent capabilities            # 能力自发现
+cli-anything-infostation process add "内容或URL"        # 录入 → 卡片+TODO
+cli-anything-infostation todos list --view today       # 今日待办
+cli-anything-infostation todos update <id> --status done
+```
+
+鉴权：服务端 `.env` 的 `API_TOKEN`（`openssl rand -hex 24` 生成）；未配置则接口开放（仅限本地开发）。
+
 ## 功能清单（PRD P0 + P1）
 
 - **M1 信息采集**：URL 自动抓取（通用网页 / 公众号；小红书、推特等登录墙平台优雅降级提示手动粘贴）、文本/想法录入、可选预设分类与优先级
