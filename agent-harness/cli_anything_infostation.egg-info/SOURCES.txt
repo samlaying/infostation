@@ -1,0 +1,13 @@
+README.md
+setup.py
+cli_anything/__init__.py
+cli_anything/infostation/__init__.py
+cli_anything/infostation/__main__.py
+cli_anything/infostation/infostation_cli.py
+cli_anything/infostation/core/__init__.py
+cli_anything/infostation/core/client.py
+cli_anything_infostation.egg-info/PKG-INFO
+cli_anything_infostation.egg-info/SOURCES.txt
+cli_anything_infostation.egg-info/dependency_links.txt
+cli_anything_infostation.egg-info/entry_points.txt
+cli_anything_infostation.egg-info/top_level.txt

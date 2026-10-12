@@ -1,0 +1,2 @@
+[console_scripts]
+cli-anything-infostation = cli_anything.infostation.infostation_cli:main
