@@ -5,6 +5,7 @@ import { useAppStore } from './stores/app';
 import { toastState } from './stores/toast';
 import BgOrbs from './components/BgOrbs.vue';
 import AppToast from './components/AppToast.vue';
+import TokenGate from './components/TokenGate.vue';
 
 const router = useRouter();
 const appStore = useAppStore();
@@ -60,6 +61,7 @@ onMounted(() => {
       </RouterView>
     </main>
 
+    <TokenGate />
     <AppToast :toasts="toastState.toasts" />
   </div>
 </template>

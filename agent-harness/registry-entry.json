@@ -1,0 +1,19 @@
+{
+  "name": "infostation",
+  "display_name": "InfoStation",
+  "version": "0.1.0",
+  "description": "Agent-native CLI for InfoStation — capture URLs/text/ideas, let the SiMi agent turn them into knowledge cards with extracted TODOs, and manage cards, TODO board, analytics, weekly reports, and backups via the REST API.",
+  "requires": "InfoStation server running (local npm run dev or deployed instance)",
+  "homepage": "https://github.com/samlaying/infostation",
+  "source_url": "https://github.com/samlaying/infostation",
+  "install_cmd": "pip install git+https://github.com/samlaying/infostation.git#subdirectory=agent-harness",
+  "entry_point": "cli-anything-infostation",
+  "skill_md": "skills/SKILL.md",
+  "category": "productivity",
+  "contributors": [
+    {
+      "name": "samlaying",
+      "url": "https://github.com/samlaying"
+    }
+  ]
+}
