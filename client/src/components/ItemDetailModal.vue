@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue';
 import { useItemsStore } from '../stores/items';
 import { useTodosStore } from '../stores/todos';
 import {
-  CATEGORY_MAP, CONTENT_TYPE_MAP, PRIORITY_MAP, PLATFORM_MAP, timeAgo, fmtDate,
+  CATEGORY_MAP, CONTENT_TYPE_MAP, PRIORITY_MAP, PLATFORM_MAP, LINE_MAP, timeAgo, fmtDate,
 } from '../constants';
 import { toastError, toastSuccess } from '../stores/toast';
 
@@ -30,6 +30,7 @@ watch(
         primary_category: props.item.primary_category,
         content_type: props.item.content_type,
         priority: props.item.priority,
+        line: props.item.line || 'trial',
         tags: (props.item.tags || []).join(', '),
       };
     }
@@ -180,6 +181,12 @@ function onKeydown(e) {
                 <textarea v-model="form.summary" class="glass-input" rows="3" />
               </label>
               <div class="form-grid">
+                <label class="form-row">
+                  <span>产品线</span>
+                  <select v-model="form.line" class="glass-select glass-input">
+                    <option v-for="(l, key) in LINE_MAP" :key="key" :value="key">{{ l.icon }} {{ l.label }}</option>
+                  </select>
+                </label>
                 <label class="form-row">
                   <span>分类</span>
                   <select v-model="form.primary_category" class="glass-select glass-input">

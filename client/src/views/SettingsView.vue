@@ -237,7 +237,7 @@ function removeToken() {
 }
 .settings__hint code {
   padding: 1px 6px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.06);
   border-radius: 4px;
   font-size: 12px;
   color: var(--accent-cyan);

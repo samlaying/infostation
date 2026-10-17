@@ -6,6 +6,7 @@ import { GOAL_COLUMNS, CATEGORY_MAP, PRIORITY_MAP } from '../constants';
 import TodoItem from '../components/TodoItem.vue';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
+import SegmentTabs from '../components/SegmentTabs.vue';
 import { toastError, toastSuccess } from '../stores/toast';
 
 const todosStore = useTodosStore();
@@ -24,11 +25,25 @@ const VIEW_TABS = [
   { key: 'done', label: '完成记录', icon: '🏆' },
 ];
 
+// 今日 tab 带待办计数徽章
+const tabsWithCount = computed(() =>
+  VIEW_TABS.map((t) =>
+    t.key === 'today' && todosStore.todaySummary
+      ? { ...t, count: todosStore.todaySummary.pending_count }
+      : t
+  )
+);
+
+// 泳道色调跟随领域色
+const colColor = (key) => CATEGORY_MAP[key]?.color || 'var(--accent-blue)';
+
 async function load() {
+  // 面板只显示 TODO 线（行动项）；自媒体线的内容工序在「内容生产」视图
+  const base = { line: 'trial' };
   const params =
-    view.value === 'today' ? { view: 'today' }
-    : view.value === 'done' ? { view: 'done' }
-    : { view: 'pending' };
+    view.value === 'today' ? { ...base, view: 'today' }
+    : view.value === 'done' ? { ...base, view: 'done' }
+    : { ...base, view: 'pending' };
   await todosStore.load(params);
 }
 
@@ -56,7 +71,7 @@ async function createTodo() {
   if (!title) return;
   creating.value = true;
   try {
-    await todosStore.create({ title, category: newTodoCategory.value, priority: 'medium' });
+    await todosStore.create({ title, category: newTodoCategory.value, priority: 'medium', line: 'trial' });
     newTodoTitle.value = '';
     toastSuccess('TODO 已创建');
   } catch (e) {
@@ -89,20 +104,7 @@ async function openSource(todo) {
       </button>
     </div>
 
-    <div class="todos-view__tabs">
-      <button
-        v-for="t in VIEW_TABS"
-        :key="t.key"
-        class="filter-chip"
-        :class="{ 'is-active': view === t.key }"
-        @click="view = t.key"
-      >
-        {{ t.icon }} {{ t.label }}
-        <span v-if="t.key === 'today' && todosStore.todaySummary" class="todos-view__count">
-          {{ todosStore.todaySummary.pending_count }}
-        </span>
-      </button>
-    </div>
+    <SegmentTabs v-model="view" :tabs="tabsWithCount" class="todos-view__tabs" />
 
     <!-- 今日待办 / 全部 -->
     <template v-if="view === 'today' || view === 'all'">
@@ -125,7 +127,12 @@ async function openSource(todo) {
     <!-- 目标看板 -->
     <template v-else-if="view === 'board'">
       <div class="todos-view__board">
-        <section v-for="col in goalGroups" :key="col.key" class="glass-panel todos-view__col">
+        <section
+          v-for="col in goalGroups"
+          :key="col.key"
+          class="glass-panel todos-view__col"
+          :style="{ '--lane-color': colColor(col.key) }"
+        >
           <header class="todos-view__col-header">
             <span>{{ col.icon }} {{ col.label }}</span>
             <span class="todos-view__count">{{ col.todos.length }}</span>
@@ -177,15 +184,14 @@ async function openSource(todo) {
 .todos-view__create-input { flex: 1; }
 .todos-view__create-select { width: auto; flex-shrink: 0; }
 
-.todos-view__tabs { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.todos-view__tabs { align-self: flex-start; }
 .todos-view__count {
   padding: 0 8px;
   font: var(--font-micro);
   color: var(--text-secondary);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(15, 23, 42, 0.06);
   border-radius: var(--radius-full);
 }
-.filter-chip.is-active .todos-view__count { color: #fff; background: rgba(255, 255, 255, 0.2); }
 
 .todos-view__list {
   display: flex;
@@ -193,10 +199,16 @@ async function openSource(todo) {
   gap: var(--space-4);
 }
 
+/* 目标看板：磨砂玻璃泳道（淡色底 30% + 领域色顶线） */
 .todos-view__board {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: var(--space-7);
+}
+
+.todos-view__col {
+  background: color-mix(in srgb, var(--lane-color) 6%, var(--glass-bg));
+  border-top: 2px solid color-mix(in srgb, var(--lane-color) 55%, transparent);
 }
 
 .todos-view__col-header {
@@ -206,6 +218,10 @@ async function openSource(todo) {
   font: var(--font-h3);
   padding: var(--space-7) var(--space-9);
   border-bottom: 1px solid var(--glass-border);
+}
+.todos-view__col-header .todos-view__count {
+  color: var(--lane-color);
+  background: color-mix(in srgb, var(--lane-color) 12%, transparent);
 }
 .todos-view__col-body {
   display: flex;

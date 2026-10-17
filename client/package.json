@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "pinia": "^2.2.2",
+    "shaders": "^4.0.4",
     "vue": "^3.4.38",
     "vue-router": "^4.4.3"
   },
