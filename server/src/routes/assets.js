@@ -9,6 +9,7 @@ import {
   isValidPostPlatform,
   isValidPostStatus,
 } from '../constants.js';
+import { broadcast } from '../services/events.js';
 
 export const assetsRouter = Router();
 export const postsRouter = Router();
@@ -60,6 +61,7 @@ assetsRouter.post('/assets', (req, res) => {
       prompt || null,
       JSON.stringify(metadata || {})
     );
+  broadcast('assets', 'create');
   res.status(201).json(rowToAsset(db.prepare('SELECT * FROM assets WHERE id = ?').get(info.lastInsertRowid)));
 });
 
@@ -78,11 +80,13 @@ assetsRouter.patch('/assets/:id', (req, res) => {
 
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE assets SET ${setSql} WHERE id = @id`).run({ ...updates, id });
+  broadcast('assets', 'update', id);
   res.json(rowToAsset(db.prepare('SELECT * FROM assets WHERE id = ?').get(id)));
 });
 
 assetsRouter.delete('/assets/:id', (req, res) => {
   db.prepare('DELETE FROM assets WHERE id = ?').run(req.params.id);
+  broadcast('assets', 'delete', req.params.id);
   res.json({ ok: true });
 });
 
@@ -126,6 +130,7 @@ postsRouter.post('/posts', (req, res) => {
     )
     .run(source_item_id, topic_id || null, platform, String(title).trim(), content_body, JSON.stringify(asset_ids));
 
+  broadcast('posts', 'create');
   res.status(201).json(rowToPost(db.prepare('SELECT * FROM posts WHERE id = ?').get(info.lastInsertRowid)));
 });
 
@@ -148,11 +153,13 @@ postsRouter.patch('/posts/:id', (req, res) => {
 
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE posts SET ${setSql} WHERE id = @id`).run({ ...updates, id });
+  broadcast('posts', 'update', id);
   res.json(rowToPost(db.prepare('SELECT * FROM posts WHERE id = ?').get(id)));
 });
 
 postsRouter.delete('/posts/:id', (req, res) => {
   db.prepare('DELETE FROM posts WHERE id = ?').run(req.params.id);
+  broadcast('posts', 'delete', req.params.id);
   res.json({ ok: true });
 });
 

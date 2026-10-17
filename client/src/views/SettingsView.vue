@@ -4,6 +4,7 @@ import { useAppStore } from '../stores/app';
 import { exportJson, importJson, clearAllData, getToken, setToken } from '../api';
 import { CATEGORY_MAP } from '../constants';
 import { toast, toastError, toastSuccess } from '../stores/toast';
+import { useLiveReload } from '../api/live';
 
 const appStore = useAppStore();
 
@@ -20,6 +21,9 @@ onMounted(async () => {
   if (!appStore.loaded) await appStore.load();
   goals.value = [...(appStore.settings?.user_goals || ['career', 'media', 'sidehustle'])];
 });
+
+// SSE：导入/清库等全局变更后刷新计数
+useLiveReload(() => appStore.load(), []);
 
 const llm = computed(() => appStore.settings?.llm || {});
 const counts = computed(() => appStore.settings?.counts || {});

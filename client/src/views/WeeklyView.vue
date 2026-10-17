@@ -4,6 +4,7 @@ import { fetchWeeklyReport, fetchWeeklyReports } from '../api';
 import { CATEGORY_MAP, PRIORITY_MAP } from '../constants';
 import EmptyState from '../components/EmptyState.vue';
 import { toastError } from '../stores/toast';
+import { useLiveReload } from '../api/live';
 
 const report = ref(null);
 const history = ref([]);
@@ -26,6 +27,9 @@ async function load(refresh = false) {
 }
 
 onMounted(() => load());
+
+// SSE：导入/清库等全局变更后重拉周报
+useLiveReload(() => load(), []);
 
 async function viewHistory(r) {
   report.value = r;

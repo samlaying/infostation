@@ -8,6 +8,7 @@ import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
 import SegmentTabs from '../components/SegmentTabs.vue';
 import { toastError, toastSuccess } from '../stores/toast';
+import { useLiveReload } from '../api/live';
 
 const todosStore = useTodosStore();
 const itemsStore = useItemsStore();
@@ -49,6 +50,9 @@ async function load() {
 
 onMounted(load);
 watch(view, load);
+
+// SSE：CLI/其他端落库或改 TODO 后，本视图自动重拉
+useLiveReload(load, ['todos']);
 
 // 目标看板按三列分组
 const goalGroups = computed(() =>

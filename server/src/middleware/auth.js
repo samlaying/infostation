@@ -1,6 +1,6 @@
 // ===== API Token 认证中间件 =====
-// .env 配置 API_TOKEN 后，所有 /api/v1/* 强制鉴权（Authorization: Bearer <token> 或 X-API-Key: <token>）。
-// 未配置 API_TOKEN 时开放访问（本地开发模式）。
+// .env 配置 API_TOKEN 后，所有 /api/v1/* 强制鉴权（Authorization: Bearer <token> / X-API-Key: <token> / ?token= 查询参数）。
+// 未配置 API_TOKEN 时开放访问（本地开发模式）。查询参数只为 SSE 的 EventSource 服务（它无法带 header）。
 
 export function requireToken(req, res, next) {
   const token = process.env.API_TOKEN;
@@ -9,7 +9,8 @@ export function requireToken(req, res, next) {
   const auth = req.headers.authorization || '';
   const bearer = auth.startsWith('Bearer ') ? auth.slice(7).trim() : '';
   const apiKey = req.headers['x-api-key'] || '';
-  const provided = bearer || apiKey;
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : '';
+  const provided = bearer || apiKey || queryToken;
 
   if (provided && timingSafeEqual(provided, token)) return next();
 

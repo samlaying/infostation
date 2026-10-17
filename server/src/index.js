@@ -17,6 +17,7 @@ import { backupRouter } from './routes/backup.js';
 import { agentRouter } from './routes/agent.js';
 import { topicsRouter } from './routes/topics.js';
 import { assetsRouter, postsRouter } from './routes/assets.js';
+import { eventsRouter } from './routes/events.js';
 import { requireToken } from './middleware/auth.js';
 import { llmConfigured } from './services/agent.js';
 
@@ -42,6 +43,7 @@ api.use(statsRouter);
 api.use(weeklyRouter);
 api.use(settingsRouter);
 api.use(backupRouter);
+api.use(eventsRouter); // SSE 变更推送（GET /api/v1/events）
 app.use('/api/v1', api);
 
 // ===== 生产模式：托管前端构建产物（client/dist），SPA 回退到 index.html =====

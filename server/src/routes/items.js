@@ -3,6 +3,7 @@
 import { Router } from 'express';
 import { db, rowToItem, rowToTodo } from '../db.js';
 import { isValidCategory, isValidContentType, isValidPriority, isValidLine, isValidItemType, CATEGORIES, CONTENT_TYPES, PRIORITIES, SOURCE_PLATFORMS } from '../constants.js';
+import { broadcast } from '../services/events.js';
 
 export const itemsRouter = Router();
 
@@ -128,6 +129,7 @@ itemsRouter.patch('/items/:id', (req, res) => {
   updates.updated_at = new Date().toISOString();
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE items SET ${setSql} WHERE id = @id`).run({ ...updates, id: req.params.id });
+  broadcast('items', 'update', req.params.id);
   res.json(rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)));
 });
 
@@ -135,5 +137,7 @@ itemsRouter.patch('/items/:id', (req, res) => {
 itemsRouter.delete('/items/:id', (req, res) => {
   const info = db.prepare('DELETE FROM items WHERE id = ?').run(req.params.id);
   if (!info.changes) return res.status(404).json({ error: '信息不存在' });
+  broadcast('items', 'delete', req.params.id);
+  broadcast('todos', 'delete'); // 级联删了关联 TODO，TODO 视图需要重拉
   res.json({ ok: true });
 });

@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import { db, rowToTodo, rowToItem } from '../db.js';
 import { isValidCategory, isValidPriority, isValidTodoStatus, isValidLine } from '../constants.js';
+import { broadcast } from '../services/events.js';
 
 export const todosRouter = Router();
 
@@ -93,6 +94,7 @@ todosRouter.post('/todos', (req, res) => {
     targetLine || 'trial',
     now
   );
+  broadcast('todos', 'create', id);
   res.status(201).json(rowToTodo(db.prepare('SELECT * FROM todos WHERE id = ?').get(id)));
 });
 
@@ -118,6 +120,7 @@ todosRouter.patch('/todos/:id', (req, res) => {
 
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE todos SET ${setSql} WHERE id = @id`).run({ ...updates, id: req.params.id });
+  broadcast('todos', 'update', req.params.id);
   res.json(rowToTodo(db.prepare('SELECT * FROM todos WHERE id = ?').get(req.params.id)));
 });
 
@@ -125,5 +128,6 @@ todosRouter.patch('/todos/:id', (req, res) => {
 todosRouter.delete('/todos/:id', (req, res) => {
   const info = db.prepare('DELETE FROM todos WHERE id = ?').run(req.params.id);
   if (!info.changes) return res.status(404).json({ error: 'TODO 不存在' });
+  broadcast('todos', 'delete', req.params.id);
   res.json({ ok: true });
 });

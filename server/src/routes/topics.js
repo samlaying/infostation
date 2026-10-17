@@ -5,6 +5,7 @@
 import { Router } from 'express';
 import { db, rowToTopic } from '../db.js';
 import { isValidLine } from '../constants.js';
+import { broadcast } from '../services/events.js';
 
 export const topicsRouter = Router();
 
@@ -56,6 +57,7 @@ topicsRouter.post('/topics', (req, res) => {
     )
     .run(n, slug, icon, color, isValidLine(default_line) ? default_line : 'trial', description, sort_order || 0);
 
+  broadcast('topics', 'create');
   res.status(201).json(rowToTopic(db.prepare('SELECT * FROM topics WHERE id = ?').get(info.lastInsertRowid)));
 });
 
@@ -79,6 +81,7 @@ topicsRouter.patch('/topics/:id', (req, res) => {
 
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE topics SET ${setSql}, updated_at = datetime('now') WHERE id = @id`).run({ ...updates, id });
+  broadcast('topics', 'update', id);
   res.json(rowToTopic(db.prepare('SELECT * FROM topics WHERE id = ?').get(id)));
 });
 
@@ -88,5 +91,6 @@ topicsRouter.delete('/topics/:id', (req, res) => {
   const existing = db.prepare('SELECT * FROM topics WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '主题不存在' });
   db.prepare('DELETE FROM topics WHERE id = ?').run(id);
+  broadcast('all', 'delete', id); // 挂在主题下的 items/todos.topic_id 全被置空，各视图都重拉
   res.json({ ok: true, deleted: existing.name });
 });

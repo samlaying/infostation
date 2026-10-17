@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import { db, rowToItem, rowToTodo, transaction } from '../db.js';
 import { isValidCategory, isValidPriority, isValidTodoStatus, isValidLine } from '../constants.js';
+import { broadcast } from '../services/events.js';
 
 export const backupRouter = Router();
 
@@ -138,6 +139,7 @@ backupRouter.post('/import', (req, res) => {
   })();
 
   res.json({ ok: true, items_imported: itemsCount, todos_imported: todosCount });
+  broadcast('all', 'import');
 });
 
 // ---- 清空数据 ----
@@ -148,5 +150,6 @@ backupRouter.delete('/data', (req, res) => {
     db.prepare('DELETE FROM items').run();
     db.prepare('DELETE FROM weekly_reports').run();
   })();
+  broadcast('all', 'clear');
   res.json({ ok: true });
 });

@@ -8,6 +8,7 @@ import { LINE_MAP, MEDIA_ROLE_MAP, CATEGORY_MAP, PRIORITY_MAP, timeAgo } from '.
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
 import { toastError, toastSuccess, toast } from '../stores/toast';
+import { useLiveReload } from '../api/live';
 
 const topics = ref([]);        // 选题卡
 const packages = ref([]);      // 发布包卡
@@ -41,6 +42,9 @@ async function load() {
   }
 }
 onMounted(load);
+
+// SSE：选题/工序/发布包任何一环变更后自动重拉三区
+useLiveReload(load, ['items', 'todos', 'posts', 'assets']);
 
 const counts = computed(() => ({
   选题库: topics.value.length,

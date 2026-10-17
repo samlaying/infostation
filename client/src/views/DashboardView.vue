@@ -8,6 +8,7 @@ import { CATEGORY_MAP, PRIORITY_MAP, timeAgo, LINE_MAP } from '../constants';
 import QuickInput from '../components/QuickInput.vue';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
+import { useLiveReload } from '../api/live';
 
 const router = useRouter();
 const itemsStore = useItemsStore();
@@ -29,6 +30,9 @@ async function loadAll() {
 }
 
 onMounted(loadAll);
+
+// SSE：任何端落库（卡片/TODO/主题）后，工作台自动刷新
+useLiveReload(loadAll, ['items', 'todos', 'topics']);
 
 function onProcessed() {
   loadAll();

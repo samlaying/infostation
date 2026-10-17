@@ -11,6 +11,7 @@ import CategoryBars from '../components/CategoryBars.vue';
 import TagCloud from '../components/TagCloud.vue';
 import TopicDock from '../components/TopicDock.vue';
 import SegmentTabs from '../components/SegmentTabs.vue';
+import { useLiveReload } from '../api/live';
 
 const itemsStore = useItemsStore();
 const statsStore = useStatsStore();
@@ -32,6 +33,9 @@ const lens = computed({
 onMounted(async () => {
   await Promise.all([itemsStore.load(1), statsStore.load()]);
 });
+
+// SSE：卡片/主题变更后自动刷新当前页与统计
+useLiveReload(() => { itemsStore.refresh(); statsStore.load(); }, ['items', 'topics']);
 
 watch(
   () => itemsStore.filters,

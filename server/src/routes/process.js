@@ -8,6 +8,7 @@ import { runAgent, llmConfigured } from '../services/agent.js';
 import { extractUrl } from '../services/extractor.js';
 import { findDuplicate } from '../services/dedup.js';
 import { linkByTagOverlap } from '../services/relations.js';
+import { broadcast } from '../services/events.js';
 import { detectPlatform, isUrl, isValidCategory, isValidPriority, isValidLine } from '../constants.js';
 
 export const processRouter = Router();
@@ -208,6 +209,11 @@ processRouter.post('/process', async (req, res, next) => {
       // v2.0：同主题 ≥2 共同标签的卡片自动建双向 tag_overlap 关联（激活 item_relations）
       linkByTagOverlap(itemId);
     })();
+
+    // SSE 广播：卡片/TODO/新主题落库，订阅面板实时刷新
+    broadcast('items', 'create', itemId);
+    if (todosToInsert.length) broadcast('todos', 'create');
+    if (topicId) broadcast('topics', 'create');
 
     const item = rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(itemId));
     const todos = db

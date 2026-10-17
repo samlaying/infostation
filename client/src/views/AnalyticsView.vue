@@ -7,6 +7,7 @@ import TrendChart from '../components/TrendChart.vue';
 import CategoryBars from '../components/CategoryBars.vue';
 import TagCloud from '../components/TagCloud.vue';
 import EmptyState from '../components/EmptyState.vue';
+import { useLiveReload } from '../api/live';
 
 const statsStore = useStatsStore();
 const trendRange = ref(7); // 7 | 30
@@ -23,6 +24,9 @@ const todoSplit = computed(() => {
 });
 
 onMounted(() => statsStore.load());
+
+// SSE：数据变更后统计自动重算
+useLiveReload(() => statsStore.load(), ['items', 'todos']);
 
 const series = computed(() =>
   trendRange.value === 7 ? statsStore.data?.trend_7d : statsStore.data?.trend_30d
