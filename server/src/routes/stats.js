@@ -56,6 +56,16 @@ statsRouter.get('/stats', (req, res) => {
   const weekDone = db.prepare("SELECT COUNT(*) c FROM todos WHERE status='done' AND substr(completed_at,1,10) >= ?").get(weekAgo).c;
   const weekCreated = db.prepare("SELECT COUNT(*) c FROM todos WHERE substr(created_at,1,10) >= ?").get(weekAgo).c;
 
+  // v2.0：分线口径 —— TODO 总数 = 行动(trial) + 内容工序(media)，前端双轨条直接消费
+  const lineSplit = db
+    .prepare(
+      `SELECT
+         COUNT(CASE WHEN line = 'trial' THEN 1 END) AS trial_count,
+         COUNT(CASE WHEN line = 'media' THEN 1 END) AS media_count
+       FROM todos`
+    )
+    .get();
+
   // 分类分布
   const categoryDist = CATEGORIES.map((cat) => ({
     category: cat,
@@ -97,6 +107,8 @@ statsRouter.get('/stats', (req, res) => {
     },
     todos: {
       total: totalTodos,
+      trial_count: lineSplit.trial_count,
+      media_count: lineSplit.media_count,
       done: doneTodos,
       pending: pendingTodos,
       archived: archivedTodos,

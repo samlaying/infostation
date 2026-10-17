@@ -15,6 +15,8 @@ import { weeklyRouter } from './routes/weekly.js';
 import { settingsRouter } from './routes/settings.js';
 import { backupRouter } from './routes/backup.js';
 import { agentRouter } from './routes/agent.js';
+import { topicsRouter } from './routes/topics.js';
+import { assetsRouter, postsRouter } from './routes/assets.js';
 import { requireToken } from './middleware/auth.js';
 import { llmConfigured } from './services/agent.js';
 
@@ -29,6 +31,9 @@ app.use(express.json({ limit: '5mb' })); // 导入备份可能较大
 const api = express.Router();
 api.use(requireToken); // 配置 API_TOKEN 后强制鉴权（见 middleware/auth.js）
 api.use(agentRouter);
+api.use(topicsRouter);
+api.use(assetsRouter);
+api.use(postsRouter);
 api.use(processRouter);
 api.use(itemsRouter);
 api.use(todosRouter);

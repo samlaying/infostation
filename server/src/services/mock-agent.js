@@ -22,8 +22,14 @@ const CONTENT_TYPE_KEYWORDS = {
   insight: [],
 };
 
-// 行动动词（PRD 4.2.4 TODO 提取规则）
+// 行动动词（PRD 4.2.4 TODO 提取规则）—— TODO 线
 const ACTION_VERBS = ['注册', '下载', '安装', '试用', '学习', '研究', '写', '建立', '完成', '阅读', '读', '练习', '制定', '创建', '搭建', '优化', '复盘', '发布', '发布', '联系', '申请', '尝试', '配置', '整理', '拆解', '分析', '开通'];
+
+// 内容工序动词 —— 自媒体线（指向内容产出，不是"读资料"）
+const CONTENT_VERBS = ['撰写', '起草', '拆解', '提炼', '改写', '配图', '成稿', '定稿', '排版', '写', '创作', '剪辑', '仿写', '扩写', '改写'];
+
+// 填充式动词 —— 自媒体线明确排除（"阅读素材""精读图文"不是工序，是噪音）
+const FILLER_VERBS = ['阅读', '精读', '整理', '收集', '了解', '查看', '浏览'];
 
 function clamp(str, max) {
   if (!str) return '';
@@ -95,7 +101,10 @@ function extractTags(text, rawTags = []) {
 }
 
 /** 从句子中提取行动型 TODO */
-function extractTodosFromText(text, category) {
+function extractTodosFromText(text, category, line = 'trial') {
+  const isMedia = line === 'media';
+  const verbList = isMedia ? CONTENT_VERBS : ACTION_VERBS;
+  const maxTodos = isMedia ? 3 : 5;
   const todos = [];
   // 句子 + 分号子句 + 「然后/逗号」动作子句
   const clauses = [
@@ -108,8 +117,10 @@ function extractTodosFromText(text, category) {
   const seen = new Set();
   const candidates = [];
   for (const s of clauses) {
-    const verb = ACTION_VERBS.find((v) => s.includes(v));
+    const verb = verbList.find((v) => s.includes(v));
     if (!verb) continue;
+    // 自媒体线：命中填充式动词（阅读/精读/整理…）直接丢弃，不生成工序
+    if (isMedia && FILLER_VERBS.some((f) => s.includes(f))) continue;
     // 截取动词附近的片段作为 TODO 标题
     const idx = s.indexOf(verb);
     const frag = s.slice(idx, idx + 24).replace(/[，。,.！!？?；;、]/g, '');
@@ -124,7 +135,7 @@ function extractTodosFromText(text, category) {
     (c) => !candidates.some((o) => o !== c && o.title.length < c.title.length && c.title.includes(o.title))
   );
   for (const c of filtered) {
-    if (todos.length >= 5) break;
+    if (todos.length >= maxTodos) break;
     todos.push({
       title: c.title,
       description: clamp(c.source, 100),
@@ -176,7 +187,7 @@ export function mockAgent(input, opts = {}) {
 
   const priority = PRIORITY_ASSUMPTION(opts, fullText, finalCategory);
 
-  const todos = extractTodosFromText(rawText, finalCategory).map((t) => ({
+  const todos = extractTodosFromText(rawText, finalCategory, opts.line || 'trial').map((t) => ({
     ...t,
     priority: t.priority || priority,
   }));

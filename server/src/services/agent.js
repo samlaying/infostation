@@ -94,6 +94,8 @@ function normalizeAgentResult(parsed, rawInput, opts, mode) {
 
   return {
     title: String(parsed?.title || fallback.title).slice(0, 40),
+    // v2.0：主题归属（字符串主题名，由 process.js 解析为 topic_id；新主题会自动建档）
+    topic: parsed?.topic == null ? null : String(parsed.topic).trim().slice(0, 12) || null,
     summary: String(parsed?.summary || fallback.summary).slice(0, 150),
     key_points: (Array.isArray(parsed?.key_points) ? parsed.key_points : fallback.key_points)
       .map((k) => String(k).slice(0, 60))
@@ -122,7 +124,7 @@ function normalizeAgentResult(parsed, rawInput, opts, mode) {
 /**
  * Agent 主入口
  * @param {object} rawInput RawInput
- * @param {object} opts { preferredCategory, preferredPriority, userGoals, userContext, existingTags }
+ * @param {object} opts { preferredCategory, preferredPriority, userGoals, userContext, existingTags, line }
  */
 export async function runAgent(rawInput, opts = {}) {
   if (!llmConfigured()) {
@@ -132,6 +134,8 @@ export async function runAgent(rawInput, opts = {}) {
   const system = buildSystemPrompt({
     userGoals: opts.userGoals,
     existingTags: opts.existingTags || [],
+    line: opts.line || 'trial',
+    topics: opts.topics || [],
   });
   const user = buildUserPrompt(rawInput, opts.userContext);
 

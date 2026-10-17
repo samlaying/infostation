@@ -7,7 +7,8 @@ import { db, rowToItem, rowToTodo, getSetting, transaction } from '../db.js';
 import { runAgent, llmConfigured } from '../services/agent.js';
 import { extractUrl } from '../services/extractor.js';
 import { findDuplicate } from '../services/dedup.js';
-import { detectPlatform, isUrl, isValidCategory, isValidPriority } from '../constants.js';
+import { linkByTagOverlap } from '../services/relations.js';
+import { detectPlatform, isUrl, isValidCategory, isValidPriority, isValidLine } from '../constants.js';
 
 export const processRouter = Router();
 
@@ -20,12 +21,15 @@ processRouter.post('/process', async (req, res, next) => {
       preferred_priority,
       user_note = '',
       user_context = '',
+      line,
     } = req.body || {};
 
     if (!content || !String(content).trim()) {
       return res.status(400).json({ error: '内容不能为空' });
     }
     const rawContent = String(content).trim();
+    // 默认归 TODO 线；自媒体线需显式传 line=media
+    const targetLine = isValidLine(line) ? line : 'trial';
 
     // ---- Step 1: URL 输入先抓取 ----
     let rawInput;
@@ -91,13 +95,41 @@ processRouter.post('/process', async (req, res, next) => {
       .all()
       .flatMap((r) => { try { return JSON.parse(r.tags); } catch { return []; } });
 
+    const topicRows = db
+      .prepare(`SELECT id, name, default_line FROM topics WHERE status = 'active' ORDER BY sort_order, id`)
+      .all();
+
     const result = await runAgent(rawInput, {
       preferredCategory: isValidCategory(preferred_category) ? preferred_category : undefined,
       preferredPriority: isValidPriority(preferred_priority) ? preferred_priority : undefined,
       userGoals,
       userContext: user_context,
       existingTags: [...new Set(topTags)].slice(0, 20),
+      line: targetLine,
+      topics: topicRows.map((t) => t.name),
     });
+
+    // ---- v2.0：主题解析（Agent 返回主题名 → topic_id；新主题自动建档）----
+    let topicId = null;
+    if (result.topic) {
+      const hit = topicRows.find((t) => t.name === result.topic);
+      if (hit) {
+        topicId = hit.id;
+      } else {
+        const slug = result.topic.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '');
+        const info = db
+          .prepare(`INSERT INTO topics (name, slug, default_line) VALUES (?, ?, ?)`)
+          .run(result.topic, slug || `topic-${Date.now()}`, targetLine);
+        topicId = Number(info.lastInsertRowid);
+      }
+    }
+
+    // ---- v2.0：卡片角色（确定性规则，不依赖 LLM）----
+    // 输入以「选题｜」开头 → idea；「发布包」开头或标签含发布包 → bundle
+    const roleText = `${rawContent}\n${user_note || ''}`;
+    let itemType = 'material';
+    if (/^发布包|^【发布包/.test(roleText) || (result.tags || []).includes('发布包')) itemType = 'bundle';
+    else if (/^选题[｜:：]/.test(roleText) || (result.tags || []).includes('选题')) itemType = 'idea';
 
     if (extractWarning) {
       result.agent_note = `${extractWarning}\n${result.agent_note || ''}`.trim();
@@ -111,18 +143,20 @@ processRouter.post('/process', async (req, res, next) => {
       INSERT INTO items (id, title, summary, key_points, full_content, raw_input,
         primary_category, secondary_category, content_type, tags, priority,
         source_type, source_platform, source_url, source_author,
-        agent_confidence, agent_note, created_at, processed_at)
+        agent_confidence, agent_note, line, topic_id, item_type, parent_item_id,
+        created_at, processed_at, updated_at)
       VALUES (@id, @title, @summary, @key_points, @full_content, @raw_input,
         @primary_category, @secondary_category, @content_type, @tags, @priority,
         @source_type, @source_platform, @source_url, @source_author,
-        @agent_confidence, @agent_note, @created_at, @processed_at)
+        @agent_confidence, @agent_note, @line, @topic_id, @item_type, @parent_item_id,
+        @created_at, @processed_at, @created_at)
     `);
 
     const insertTodo = db.prepare(`
       INSERT INTO todos (id, title, description, source_item_id, source_summary,
-        category, priority, status, suggested_deadline, tags, created_at)
+        category, priority, status, suggested_deadline, tags, line, topic_id, created_at, updated_at)
       VALUES (@id, @title, @description, @source_item_id, @source_summary,
-        @category, @priority, 'pending', @suggested_deadline, @tags, @created_at)
+        @category, @priority, 'pending', @suggested_deadline, @tags, @line, @topic_id, @created_at, @created_at)
     `);
 
     const todosToInsert = (result.todos || []).map((t) => {
@@ -138,6 +172,8 @@ processRouter.post('/process', async (req, res, next) => {
         priority: t.priority || result.priority,
         suggested_deadline: deadline,
         tags: JSON.stringify(result.tags.slice(0, 3)),
+        line: targetLine,
+        topic_id: topicId,
         created_at: now,
       };
     });
@@ -161,10 +197,16 @@ processRouter.post('/process', async (req, res, next) => {
         source_author: rawInput.raw_metadata?.author || null,
         agent_confidence: result.agent_confidence,
         agent_note: result.agent_note || null,
+        line: targetLine,
+        topic_id: topicId,
+        item_type: itemType,
+        parent_item_id: null,
         created_at: now,
         processed_at: now,
       });
       for (const t of todosToInsert) insertTodo.run(t);
+      // v2.0：同主题 ≥2 共同标签的卡片自动建双向 tag_overlap 关联（激活 item_relations）
+      linkByTagOverlap(itemId);
     })();
 
     const item = rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(itemId));

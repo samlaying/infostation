@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import { db, rowToItem, rowToTodo, transaction } from '../db.js';
-import { isValidCategory, isValidPriority, isValidTodoStatus } from '../constants.js';
+import { isValidCategory, isValidPriority, isValidTodoStatus, isValidLine } from '../constants.js';
 
 export const backupRouter = Router();
 
@@ -75,17 +75,17 @@ backupRouter.post('/import', (req, res) => {
     INSERT OR IGNORE INTO items (id, title, summary, key_points, full_content, raw_input,
       primary_category, secondary_category, content_type, tags, priority,
       source_type, source_platform, source_url, source_author,
-      agent_confidence, agent_note, created_at, processed_at)
+      agent_confidence, agent_note, line, created_at, processed_at)
     VALUES (@id, @title, @summary, @key_points, @full_content, @raw_input,
       @primary_category, @secondary_category, @content_type, @tags, @priority,
       @source_type, @source_platform, @source_url, @source_author,
-      @agent_confidence, @agent_note, @created_at, @processed_at)
+      @agent_confidence, @agent_note, @line, @created_at, @processed_at)
   `);
   const insertTodo = db.prepare(`
     INSERT OR IGNORE INTO todos (id, title, description, source_item_id, source_summary,
-      category, priority, status, suggested_deadline, actual_deadline, tags, created_at, completed_at)
+      category, priority, status, suggested_deadline, actual_deadline, tags, line, created_at, completed_at)
     VALUES (@id, @title, @description, @source_item_id, @source_summary,
-      @category, @priority, @status, @suggested_deadline, @actual_deadline, @tags, @created_at, @completed_at)
+      @category, @priority, @status, @suggested_deadline, @actual_deadline, @tags, @line, @created_at, @completed_at)
   `);
 
   transaction(() => {
@@ -109,6 +109,7 @@ backupRouter.post('/import', (req, res) => {
         source_author: it.source_author || null,
         agent_confidence: Number.isFinite(it.agent_confidence) ? it.agent_confidence : 0.8,
         agent_note: it.agent_note || null,
+        line: isValidLine(it.line) ? it.line : 'trial',
         created_at: it.created_at || now,
         processed_at: it.processed_at || now,
       });
@@ -128,6 +129,7 @@ backupRouter.post('/import', (req, res) => {
         suggested_deadline: t.suggested_deadline || null,
         actual_deadline: t.actual_deadline || null,
         tags: JSON.stringify(Array.isArray(t.tags) ? t.tags : []),
+        line: isValidLine(t.line) ? t.line : 'trial',
         created_at: t.created_at || now,
         completed_at: t.completed_at || null,
       });
