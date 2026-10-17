@@ -17,11 +17,15 @@
 import argparse
 import json
 import sys
+from dataclasses import asdict
+from types import SimpleNamespace
+from typing import Any
 
 from .core import client
+from .core.client import Cfg
 
 
-def out(data, pretty=False):
+def out(data: Any, pretty: bool = False) -> None:
     if pretty:
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
@@ -30,33 +34,34 @@ def out(data, pretty=False):
 
 # ---------- 参数 → API 查询串 ----------
 
-def clean(**kw):
+def clean(**kw: Any) -> dict:
     return {k: v for k, v in kw.items() if v not in (None, "")}
 
 
 # ---------- 子命令实现 ----------
+# 约定：每个 cmd_* 接收 (args: SimpleNamespace, cfg: Cfg)，
+# 返回值恒为 dict | None —— dict 交给 out() 打印为 JSON，None 表示已自行输出。
 
-def cmd_config(args, cfg):
+def cmd_config(args: SimpleNamespace, cfg: Cfg) -> dict:
     if args.config_cmd == "show":
-        shown = dict(cfg)
+        shown = asdict(cfg)
         if shown.get("token"):
             t = shown["token"]
             shown["token"] = t[:6] + "…" + t[-4:] + f" (长度 {len(t)})"
         return shown
     if args.config_cmd == "save":
-        saved = client.save_config(url=args.url, token=args.token, timeout=args.timeout)
-        saved = dict(saved)
+        saved = asdict(client.save_config(url=args.url, token=args.token, timeout=args.timeout))
         if saved.get("token"):
             t = saved["token"]
             saved["token"] = t[:6] + "…" + t[-4:] + f" (长度 {len(t)})"
         return {"ok": True, "saved": saved, "path": str(client.CONFIG_PATH)}
 
 
-def cmd_agent(args, cfg):
+def cmd_agent(args: SimpleNamespace, cfg: Cfg) -> Any:
     return client.get("/api/v1/agent/capabilities", cfg)
 
 
-def cmd_process(args, cfg):
+def cmd_process(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.process_cmd == "add":
         return client.post("/api/v1/process", cfg, clean(
             content=args.content,
@@ -70,7 +75,7 @@ def cmd_process(args, cfg):
         return client.post("/api/v1/extract", cfg, {"url": args.url})
 
 
-def cmd_items(args, cfg):
+def cmd_items(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.items_cmd == "list":
         return client.get("/api/v1/items", cfg, **clean(
             q=args.q, category=args.category, content_type=args.type,
@@ -98,7 +103,7 @@ def cmd_items(args, cfg):
         return client.delete(f"/api/v1/items/{args.id}", cfg)
 
 
-def cmd_todos(args, cfg):
+def cmd_todos(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.todos_cmd == "list":
         return client.get("/api/v1/todos", cfg, **clean(
             view=args.view, category=args.category, priority=args.priority,
@@ -123,13 +128,13 @@ def cmd_todos(args, cfg):
         return client.delete(f"/api/v1/todos/{args.id}", cfg)
 
 
-def cmd_stats(args, cfg):
+def cmd_stats(args: SimpleNamespace, cfg: Cfg) -> Any:
     return client.get("/api/v1/stats", cfg)
 
 
 # ---------- v2.0：主题 / 资产 / 帖子 ----------
 
-def cmd_topics(args, cfg):
+def cmd_topics(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.topics_cmd == "list":
         return client.get("/api/v1/topics", cfg, **clean(status=args.status))
     if args.topics_cmd == "create":
@@ -149,7 +154,7 @@ def cmd_topics(args, cfg):
         return client.delete(f"/api/v1/topics/{args.id}", cfg)
 
 
-def cmd_assets(args, cfg):
+def cmd_assets(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.assets_cmd == "list":
         return client.get("/api/v1/assets", cfg, **clean(
             item_id=args.item, todo_id=args.todo, type=args.type,
@@ -170,7 +175,7 @@ def cmd_assets(args, cfg):
         return client.delete(f"/api/v1/assets/{args.id}", cfg)
 
 
-def cmd_posts(args, cfg):
+def cmd_posts(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.posts_cmd == "list":
         return client.get("/api/v1/posts", cfg, **clean(
             source_item_id=args.source, topic_id=args.topic,
@@ -194,18 +199,18 @@ def cmd_posts(args, cfg):
         return client.delete(f"/api/v1/posts/{args.id}", cfg)
 
 
-def _parse_ids(s):
+def _parse_ids(s: str | None) -> list[int] | None:
     return [int(x) for x in s.split(",") if x.strip()] if s else None
 
 
-def cmd_weekly(args, cfg):
+def cmd_weekly(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.weekly_cmd == "show":
         return client.get("/api/v1/weekly-report", cfg, **({"refresh": 1} if args.refresh else {}))
     if args.weekly_cmd == "history":
         return client.get("/api/v1/weekly-reports", cfg)
 
 
-def cmd_settings(args, cfg):
+def cmd_settings(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.settings_cmd == "show":
         return client.get("/api/v1/settings", cfg)
     if args.settings_cmd == "goals":
@@ -213,7 +218,7 @@ def cmd_settings(args, cfg):
         return client.put("/api/v1/settings", cfg, {"user_goals": goals})
 
 
-def cmd_backup(args, cfg):
+def cmd_backup(args: SimpleNamespace, cfg: Cfg) -> Any:
     if args.backup_cmd == "export":
         data = client.get("/api/v1/export", cfg)
         if args.out:
@@ -223,8 +228,8 @@ def cmd_backup(args, cfg):
         return data
     if args.backup_cmd == "markdown":
         status, payload = client.request(
-            "GET", "/api/v1/export/markdown", cfg["url"], cfg["token"],
-            timeout=cfg["timeout"], raw=True,
+            "GET", "/api/v1/export/markdown", cfg.url, cfg.token,
+            timeout=cfg.timeout, raw=True,
         )
         if args.out:
             with open(args.out, "wb") as f:
@@ -244,7 +249,7 @@ def cmd_backup(args, cfg):
 
 # ---------- argparse 组装 ----------
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cli-anything-infostation", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", help="InfoStation 地址（默认取 config/环境变量）")
     p.add_argument("--token", help="API Token（默认取 config/环境变量）")
@@ -454,13 +459,13 @@ HANDLERS = {
 }
 
 
-def main(argv=None):
-    args = build_parser().parse_args(argv)
+def main(argv: list[str] | None = None) -> None:
+    args: SimpleNamespace = build_parser().parse_args(argv)
     cfg = client.load_config()
     if args.url:
-        cfg["url"] = args.url
+        cfg.url = args.url
     if args.token:
-        cfg["token"] = args.token
+        cfg.token = args.token
     try:
         result = HANDLERS[args.group](args, cfg)
         if result is not None:
