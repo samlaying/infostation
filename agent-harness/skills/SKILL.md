@@ -53,31 +53,74 @@ cli-anything-infostation agent capabilities
 
 | Command | Description |
 |---------|-------------|
-| `add <content> [--category --priority --note]` | 录入 URL/文本/想法 → Agent 处理 → 卡片+TODO（URL 自动抓取正文；重复内容返回 409） |
+| `add <content> [--line trial/media --category --priority --note]` | 录入 URL/文本/想法 → Agent 处理 → 卡片+TODO（URL 自动抓取正文；重复返回 409）。v2 起 Agent 自动识别主题绑定 topic_id，识别不到可提新主题名自动建档 |
 | `url <url>` | URL 抓取预览（不落库） |
 
 ```bash
 cli-anything-infostation process add "https://mp.weixin.qq.com/s/xxx"
 cli-anything-infostation process add "建议每天写500字锻炼表达" --category media
+# 双线：trial=TODO线(值得试的东西→行动，默认) | media=自媒体线(话题素材→内容工序)
+cli-anything-infostation process add "选题｜AI副业过程透明化" --line media
 ```
 
 ### items — 知识卡片
 
 | Command | Description |
 |---------|-------------|
-| `list [--q --category --type --priority --platform --tag --todo --sort --page --size]` | 列表：筛选/全文搜索/排序/分页 |
-| `get <id>` | 详情（含提取的 TODO 与关联内容） |
-| `update <id> [--title --summary --category --type --priority --tags a,b]` | 编辑 |
-| `delete <id>` | 删除（级联删 TODO） |
+| `list [--q --category --type --priority --platform --tag --todo --line --topic --item-type --sort --page --size]` | 列表：筛选/全文搜索/排序/分页；`--topic` 按主题、`--item-type` 按角色(material素材/idea选题/bundle发布包) |
+| `get <id>` | 详情（含 TODO、tag_overlap 自动关联） |
+| `update <id> [--title --summary --category --type --priority --tags --line --topic --item-type --parent]` | 编辑；`--topic ""` 解除归属、`--parent` 设血缘（bundle→idea→material）；改 line/topic 会经触发器自动同步名下 todos |
+| `delete <id>` | 删除（级联删 TODO/资产/帖子/关联） |
 
 ### todos — TODO 面板
 
 | Command | Description |
 |---------|-------------|
-| `list [--view today/pending/done] [--category --priority --status --source-item]` | 今日待办/全部/完成记录 |
-| `create <title> [--category --priority --deadline --source-item --desc]` | 手动创建 |
+| `list [--view today/pending/done] [--category --priority --status --source-item --line --topic]` | 今日待办/全部/完成记录；`--line trial` 行动项、`--line media` 内容工序、`--topic` 按主题 |
+| `create <title> [--category --priority --deadline --source-item --line --desc]` | 手动创建（line 缺省继承来源卡片） |
 | `update <id> [--status done/in_progress/pending/archived --deadline ...]` | 完成/归档/改期/编辑（`--deadline ""` 清除） |
 | `delete <id>` | 删除 |
+
+### topics — 主题（v2：主题=目标，一等公民）
+
+| Command | Description |
+|---------|-------------|
+| `list [--status active/archived]` | 列表，含每主题的卡片数/任务数/最近活跃时间（支撑「7 天荒废」提醒） |
+| `create <name> [--icon 🔧 --line trial/media --desc --color --sort]` | 新建主题（name 唯一，重名 409）；`--desc` 是给 Agent 的主题提示词 |
+| `update <id> [--name --icon --color --line --desc --status --sort]` | 改名/归档(`--status archived`)/排序/换默认线 |
+| `delete <id>` | 删除主题（**卡片保留**，仅解除归属） |
+
+```bash
+cli-anything-infostation topics list
+cli-anything-infostation topics create "智能家居" --icon 🏠 --line trial --desc "ESP32/传感器/自动化设备"
+# 把已有卡片挂到主题（名下 todos 经触发器自动跟随）
+cli-anything-infostation items update <item_id> --topic <topic_id>
+```
+
+### assets — 媒体资产（v2：Agent 截图/生图/上传）
+
+| Command | Description |
+|---------|-------------|
+| `list [--item --todo --type screenshot/ai_image/upload/video]` | 按卡片/工序/类型过滤 |
+| `add --item <id> --type <t> [--local 路径 --url 图床URL --source 源网页 --prompt 生图提示词 --todo 工序id --metadata JSON]` | 登记资产（local/url 至少一个） |
+| `update <id> [--local --url --prompt --metadata]` | 更新（典型：上传图床后回填 `--url`） |
+| `delete <id>` | 删除记录 |
+
+### posts — 帖子（v2：多平台发布产出与回执）
+
+| Command | Description |
+|---------|-------------|
+| `list [--source --topic --platform xiaohongshu/wechat/x/bilibili/zhihu --status draft/ready/publishing/published/failed]` | 列表 |
+| `create --source <卡片id> <title> [--platform --body --assets 3,1,5 --topic]` | 创建草稿；`--assets` 决定配图顺序（引用 assets 表 id） |
+| `update <id> [--title --body --platform --status --url --assets]` | 状态机 draft→ready→publishing→published/failed；发布成功回填 `--url`（回执链接） |
+| `delete <id>` | 删除 |
+
+```bash
+# 完整发布链：登记截图 → 组装小红书帖子 → (人工/Agent 发布后) 回填写实
+cli-anything-infostation assets add --item <item_id> --type screenshot --local /abs/shot.png --source https://example.com
+cli-anything-infostation posts create --source <item_id> "300元周末搞定墨水屏天气站" --platform xiaohongshu --assets 1
+cli-anything-infostation posts update 1 --status published --url https://xhs.example/note/123
+```
 
 ### stats / weekly — 看板与周报
 
@@ -113,21 +156,35 @@ cli-anything-infostation process add "建议每天写500字锻炼表达" --categ
 ## 典型 Agent 工作流
 
 ```bash
-# 1. 探测能力
+# 1. 探测能力（v2.0：31 个端点，含 topics/assets/posts）
 cli-anything-infostation agent capabilities
 
-# 2. 录入今天刷到的内容（Agent 自动分类+提取TODO）
+# 2. 录入今天刷到的内容（Agent 自动分类+提取TODO+绑主题）
 cli-anything-infostation process add "副业案例：帮本地商家做AI代运营，单条文案50-200元，先注册小红书企业号接单"
 
 # 3. 查看今日待办并完成一条
 cli-anything-infostation todos list --view today
 cli-anything-infostation todos update <todo_id> --status done
 
-# 4. 周日生成周报
+# 4. 按主题看推进（v2）
+cli-anything-infostation topics list
+cli-anything-infostation items list --topic <topic_id>
+
+# 5. 周日生成周报
 cli-anything-infostation weekly show --refresh
 
-# 5. 备份
+# 6. 备份
 cli-anything-infostation backup export --out backup.json
+```
+
+## v2.0 Data Model（速览）
+
+```
+topics 主题(=目标) ──1:N──▶ items 卡片(topic_id) ──1:N──▶ todos(topic_id 经触发器随母卡同步)
+                             │ ├── parent_item_id 自关联血缘：bundle(发布包)→idea(选题)→material(素材)
+                             │ ├──1:N──▶ assets 资产(screenshot/ai_image/upload/video)
+                             │ └──1:N──▶ posts 帖子(平台文案+asset_ids 配图顺序+发布回执)
+                             └── item_relations：同主题 ≥2 共同标签自动双向关联(tag_overlap)
 ```
 
 ## Notes
