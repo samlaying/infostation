@@ -32,6 +32,11 @@ const todoCount = computed(() => props.item.todo_count ?? 0);
       </span>
       <div class="item-card__header-right">
         <span v-if="item.agent_confidence < 0.7" class="item-card__lowconf" title="Agent 置信度较低">?</span>
+        <span
+          class="item-card__line"
+          :class="`item-card__line--${item.line || 'trial'}`"
+          :title="item.line === 'media' ? '自媒体线 · 内容生产' : 'TODO 线 · 行动项'"
+        />
         <span class="priority-dot" :class="`priority-dot--${item.priority}`" :title="`${PRIORITY_MAP[item.priority]?.label}优先级`" />
       </div>
     </header>
@@ -85,6 +90,16 @@ const todoCount = computed(() => props.item.todo_count ?? 0);
 }
 
 .item-card__header-right { display: flex; align-items: center; gap: var(--space-4); }
+
+/* 业务线色标（磨砂色点：蓝=代试 / 橙=内容） */
+.item-card__line {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.item-card__line--trial { background: var(--line-trial); box-shadow: 0 0 6px rgba(8, 145, 178, 0.45); }
+.item-card__line--media { background: var(--line-media); box-shadow: 0 0 6px rgba(234, 88, 12, 0.45); }
+
 .item-card__lowconf {
   font: var(--font-micro);
   color: var(--accent-orange);

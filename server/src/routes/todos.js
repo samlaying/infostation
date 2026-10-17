@@ -3,20 +3,22 @@
 import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import { db, rowToTodo, rowToItem } from '../db.js';
-import { isValidCategory, isValidPriority, isValidTodoStatus } from '../constants.js';
+import { isValidCategory, isValidPriority, isValidTodoStatus, isValidLine } from '../constants.js';
 
 export const todosRouter = Router();
 
 // ---- 列表（视图筛选：today / goal / all / done）----
 todosRouter.get('/todos', (req, res) => {
-  const { view, category, priority, status, source_item_id } = req.query;
+  const { view, category, priority, status, source_item_id, line, topic_id } = req.query;
   const where = [];
   const params = {};
 
   if (isValidCategory(category)) { where.push('category = @category'); params.category = category; }
   if (isValidPriority(priority)) { where.push('priority = @priority'); params.priority = priority; }
   if (isValidTodoStatus(status)) { where.push('status = @status'); params.status = status; }
+  if (isValidLine(line)) { where.push('line = @line'); params.line = line; }
   if (source_item_id) { where.push('source_item_id = @sid'); params.sid = source_item_id; }
+  if (topic_id) { where.push('topic_id = @topic_id'); params.topic_id = Number(topic_id); }
 
   const today = new Date().toISOString().slice(0, 10);
   if (view === 'today') {
@@ -40,33 +42,46 @@ todosRouter.get('/todos', (req, res) => {
     .all(params);
 
   const items = db.prepare('SELECT id, title FROM items').all().reduce((m, r) => ((m[r.id] = r.title), m), {});
+  // today_summary 跟随 line 过滤：两条线要能各自看到自己的计数
+  const summaryLine = isValidLine(line) ? line : null;
+  const lineClause = summaryLine ? ' AND line = ?' : '';
+  const lineArg = summaryLine ? [summaryLine] : [];
   res.json({
     todos: rows.map((r) => ({ ...rowToTodo(r), source_item_title: items[r.source_item_id] || null })),
     today_summary: {
       date: today,
-      pending_count: db.prepare(`SELECT COUNT(*) c FROM todos WHERE status IN ('pending','in_progress')`).get().c,
+      line: summaryLine,
+      pending_count: db
+        .prepare(`SELECT COUNT(*) c FROM todos WHERE status IN ('pending','in_progress')${lineClause}`)
+        .get(...lineArg).c,
       today_due_count: db
         .prepare(
           `SELECT COUNT(*) c FROM todos WHERE status IN ('pending','in_progress')
-           AND (date(actual_deadline) <= date(?) OR (actual_deadline IS NULL AND date(suggested_deadline) <= date(?)))`
+           AND (date(actual_deadline) <= date(?) OR (actual_deadline IS NULL AND date(suggested_deadline) <= date(?)))${lineClause}`
         )
-        .get(today, today).c,
+        .get(today, today, ...lineArg).c,
     },
   });
 });
 
 // ---- 手动新建 ----
 todosRouter.post('/todos', (req, res) => {
-  const { title, description = '', category = 'growth', priority = 'medium', actual_deadline, source_item_id } = req.body || {};
+  const { title, description = '', category = 'growth', priority = 'medium', actual_deadline, source_item_id, line } = req.body || {};
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'TODO 标题不能为空' });
   if (source_item_id && !db.prepare('SELECT id FROM items WHERE id = ?').get(source_item_id)) {
     return res.status(400).json({ error: '来源信息不存在' });
   }
   const now = new Date().toISOString();
   const id = nanoid();
+  // 显式传 line 优先；否则继承来源卡片的线；再否则默认 trial
+  let targetLine = isValidLine(line) ? line : null;
+  if (!targetLine && source_item_id) {
+    const src = db.prepare('SELECT line FROM items WHERE id = ?').get(source_item_id);
+    if (src && isValidLine(src.line)) targetLine = src.line;
+  }
   db.prepare(`
-    INSERT INTO todos (id, title, description, source_item_id, category, priority, status, actual_deadline, tags, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '[]', ?)
+    INSERT INTO todos (id, title, description, source_item_id, category, priority, status, actual_deadline, tags, line, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '[]', ?, ?)
   `).run(
     id,
     String(title).trim().slice(0, 40),
@@ -75,6 +90,7 @@ todosRouter.post('/todos', (req, res) => {
     isValidCategory(category) ? category : 'growth',
     isValidPriority(priority) ? priority : 'medium',
     actual_deadline || null,
+    targetLine || 'trial',
     now
   );
   res.status(201).json(rowToTodo(db.prepare('SELECT * FROM todos WHERE id = ?').get(id)));
@@ -91,6 +107,7 @@ todosRouter.patch('/todos/:id', (req, res) => {
   if (typeof b.description === 'string') updates.description = b.description.slice(0, 300);
   if (isValidCategory(b.category)) updates.category = b.category;
   if (isValidPriority(b.priority)) updates.priority = b.priority;
+  if (isValidLine(b.line)) updates.line = b.line;
   if (typeof b.actual_deadline === 'string' || b.actual_deadline === null) updates.actual_deadline = b.actual_deadline || null;
   if (isValidTodoStatus(b.status)) {
     updates.status = b.status;

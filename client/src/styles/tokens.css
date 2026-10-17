@@ -1,32 +1,50 @@
-/* ===== InfoStation 设计令牌 — guide.md 第十四章速查表全量落地 ===== */
+/* ===== InfoStation 设计令牌 — v2 亮色基调（2026-10 改版）=====
+   基调：极浅冷灰白画布 + 白玻璃（Raycast/Linear 式精致玻璃）
+   层级：画布 < 弥散光(环境语义) < 玻璃容器(通透度分信息层级) < 实体内容层(承载文字) */
 
 :root {
-  /* ===== COLOR · 背景层（深色模式） ===== */
-  --bg-primary: #0a0e1a;
-  --bg-secondary: #111827;
+  /* ===== COLOR · 背景层（亮色模式） ===== */
+  --bg-primary: #f8fafc; /* 画布：极浅冷灰白 */
+  --bg-secondary: #ffffff; /* 抬升面：纯白 */
 
-  /* ===== COLOR · 玻璃层（玻璃拟态） ===== */
-  --glass-bg: rgba(255, 255, 255, 0.05);
-  --glass-bg-faint: rgba(255, 255, 255, 0.03);
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-hover: rgba(255, 255, 255, 0.08);
-  --glass-border-hover: rgba(255, 255, 255, 0.15);
-  --glass-border-active: rgba(255, 255, 255, 0.15);
-  --glass-scrollbar-hover: rgba(255, 255, 255, 0.2);
+  /* ===== COLOR · 玻璃层（白玻璃拟态） ===== */
+  --glass-bg: rgba(255, 255, 255, 0.65); /* 一级容器：白玻璃 */
+  --glass-bg-faint: rgba(255, 255, 255, 0.45);
+  --glass-bg-strong: rgba(255, 255, 255, 0.78); /* 高通透容器 */
+  --glass-border: rgba(15, 23, 42, 0.08); /* 亮色下边框是深色发丝线 */
+  --glass-border-hover: rgba(15, 23, 42, 0.14);
+  --glass-border-active: rgba(15, 23, 42, 0.14);
+  --glass-hover: rgba(255, 255, 255, 0.85); /* 亮色下 hover = 玻璃变得更白更实 */
+  --glass-scrollbar-hover: rgba(15, 23, 42, 0.25);
+  --glass-highlight: rgba(255, 255, 255, 0.85); /* 1px 内发光描边：玻璃切面反光 */
 
   /* ===== COLOR · 文字层级 ===== */
-  --text-primary: #f0f4ff;
-  --text-secondary: #8b95b0;
-  --text-muted: #4a5268;
+  --text-primary: #0f172a;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
 
-  /* ===== COLOR · 功能色 ===== */
-  --accent-blue: #3b82f6;
-  --accent-purple: #8b5cf6;
-  --accent-cyan: #06b6d4;
-  --accent-green: #10b981;
-  --accent-orange: #f59e0b;
-  --accent-pink: #ec4899;
-  --accent-red: #ef4444;
+  /* ===== COLOR · 功能色（亮底上取 500-600 级保证对比度） ===== */
+  --accent-blue: #2563eb;
+  --accent-purple: #7c3aed;
+  --accent-cyan: #0891b2;
+  --accent-green: #059669;
+  --accent-orange: #d97706;
+  --accent-pink: #db2777;
+  --accent-red: #dc2626;
+
+  /* ===== 业务线语义（Ambient Semantics）=====
+     trial = 代试/行动线：冷冽青蓝+靛紫（专注、执行）
+     media = 内容生产：珊瑚橙+琥珀金（灵感、创作）
+     agent = Agent 介入：紫粉极光 */
+  --line-trial: #0891b2;
+  --line-trial-2: #4f46e5;
+  --line-media: #ea580c;
+  --line-media-2: #d97706;
+  --line-agent: #9333ea;
+  --line-agent-2: #db2777;
+  --gradient-trial: linear-gradient(135deg, #22d3ee, #6366f1);
+  --gradient-media: linear-gradient(135deg, #fb923c, #fbbf24);
+  --gradient-agent: linear-gradient(135deg, #c084fc, #f472b6);
 
   /* ===== GRADIENT ===== */
   --gradient-1: linear-gradient(135deg, #3b82f6, #8b5cf6); /* 主按钮/Logo/标题 */
@@ -35,17 +53,22 @@
   --gradient-success: linear-gradient(135deg, #10b981, #06b6d4);
   --gradient-warning: linear-gradient(135deg, #f59e0b, #ec4899);
 
+  /* ===== 玻璃高阶层（Raycast/Linear 式）===== */
+  --pill-glass: rgba(255, 255, 255, 0.65); /* 悬浮胶囊底 */
+  --blur-mesh: 120px; /* 弥散光球专用 */
+
   /* ===== RADIUS ===== */
   --radius-lg: 20px;
   --radius-md: 14px;
   --radius-sm: 10px;
   --radius-xs: 8px;
-  --radius-full: 20px;
+  --radius-full: 999px; /* 胶囊 */
 
-  /* ===== SHADOW ===== */
-  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.3);
-  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.2);
-  --shadow-glow-blue: 0 4px 20px rgba(59, 130, 246, 0.3);
+  /* ===== SHADOW（亮色主题：柔和冷灰投影，不用重黑） ===== */
+  --shadow-glass: 0 8px 32px rgba(15, 23, 42, 0.1);
+  --shadow-card: 0 4px 24px rgba(15, 23, 42, 0.08);
+  --shadow-pill: 0 4px 24px rgba(15, 23, 42, 0.1), 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-glow-blue: 0 4px 20px rgba(37, 99, 235, 0.25);
 
   /* ===== TYPOGRAPHY =====
      本地字体栈（离线可用）：Inter → 系统字体 → 中文 PingFang/雅黑 */

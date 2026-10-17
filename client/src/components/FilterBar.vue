@@ -1,11 +1,36 @@
 <script setup>
+import { ref, watch } from 'vue';
 import { CATEGORY_MAP, CONTENT_TYPE_MAP, PRIORITY_MAP, PLATFORM_MAP } from '../constants';
 
-defineProps({
+const props = defineProps({
   filters: { type: Object, required: true },
   searchPlaceholder: { type: String, default: '搜索标题 / 内容 / 标签…' },
+  // 产品线筛选上提为「三态透镜」时隐藏此处 chips，避免重复
+  hideLine: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:filters']);
+
+// 搜索防抖：每个键击都触发 store 重载（API + 全列表重渲染）是输入卡顿的主源
+const searchText = ref('');
+let debounceTimer = null;
+function onSearchInput(e) {
+  searchText.value = e.target.value;
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => {
+    emit('update:filters', { q: searchText.value });
+  }, 300);
+}
+
+// 外部改 filters.q（如标签云点击）时同步输入框显示
+watch(
+  () => props.filters.q,
+  (v) => {
+    if (v !== searchText.value) {
+      clearTimeout(debounceTimer);
+      searchText.value = v || '';
+    }
+  }
+);
 
 function setFilter(key, value) {
   emit('update:filters', { [key]: value });
@@ -19,9 +44,9 @@ function setFilter(key, value) {
         <span class="filter-bar__search-icon">🔍</span>
         <input
           class="glass-input filter-bar__input"
-          :value="filters.q"
+          :value="searchText"
           :placeholder="searchPlaceholder"
-          @input="setFilter('q', $event.target.value)"
+          @input="onSearchInput"
         />
       </div>
       <select class="glass-select glass-input filter-bar__select" :value="filters.sort" @change="setFilter('sort', $event.target.value)">
@@ -29,6 +54,21 @@ function setFilter(key, value) {
         <option value="priority">按优先级</option>
         <option value="related">按关联数</option>
       </select>
+    </div>
+
+    <div v-if="!hideLine" class="filter-bar__chips">
+      <span class="filter-bar__group-label">产品线</span>
+      <button class="filter-chip" :class="{ 'is-active': !filters.line }" @click="setFilter('line', '')">全部</button>
+      <button
+        v-for="(l, key) in LINE_MAP"
+        :key="key"
+        class="filter-chip"
+        :class="{ 'is-active': filters.line === key }"
+        :title="l.desc"
+        @click="setFilter('line', filters.line === key ? '' : key)"
+      >
+        {{ l.icon }} {{ l.short }}
+      </button>
     </div>
 
     <div class="filter-bar__chips">

@@ -38,6 +38,24 @@ function rangeText(r) {
 
 <template>
   <div class="weekly">
+    <!-- 左：历史周报时间轴（Week Selector） -->
+    <aside v-if="history.length" class="weekly__history">
+      <h3 class="weekly__history-title">🗂 历史周报</h3>
+      <div class="weekly__timeline">
+        <button
+          v-for="r in history"
+          :key="r.id"
+          class="weekly__history-item"
+          :class="{ 'is-active': report?.week_start === r.week_start }"
+          @click="viewHistory(r)"
+        >
+          <span class="weekly__timeline-dot" aria-hidden="true" />
+          <span class="weekly__history-range">{{ rangeText(r) }}</span>
+          <span class="timestamp">{{ r.data.input_count }} 条 / {{ r.data.todo_done }} 完成</span>
+        </button>
+      </div>
+    </aside>
+
     <div v-if="report" class="weekly__main glass-panel">
       <header class="weekly__header">
         <div>
@@ -115,48 +133,44 @@ function rangeText(r) {
       title="还没有周报"
       desc="本周处理信息后自动生成"
     />
-
-    <!-- 历史周报 -->
-    <aside v-if="history.length" class="weekly__history">
-      <h3 class="weekly__history-title">🗂 历史周报</h3>
-      <button
-        v-for="r in history"
-        :key="r.id"
-        class="weekly__history-item"
-        :class="{ 'is-active': report?.week_start === r.week_start }"
-        @click="viewHistory(r)"
-      >
-        <span>{{ rangeText(r) }}</span>
-        <span class="timestamp">{{ r.data.input_count }} 条 / {{ r.data.todo_done }} 完成</span>
-      </button>
-    </aside>
   </div>
 </template>
 
 <style scoped>
+/* 杂志布局：左时间轴 + 右宽幅磨砂文档 */
 .weekly {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  grid-template-columns: 264px minmax(0, 1fr);
+  grid-template-areas: 'rail doc';
   gap: var(--space-9);
   align-items: start;
 }
 
-.weekly__main { padding: var(--space-13); }
+.weekly__main {
+  grid-area: doc;
+  padding: var(--space-13) var(--space-14);
+}
 
+/* 文档抬头：标题下压一条发丝线，杂志刊头感 */
 .weekly__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
+  padding-bottom: var(--space-7);
   margin-bottom: var(--space-9);
+  border-bottom: 1px solid var(--glass-border);
   flex-wrap: wrap;
 }
 .weekly__title { font: var(--font-h1); }
 
 .weekly__section { margin-bottom: var(--space-9); }
 .weekly__section h2 {
-  font: var(--font-h3);
+  font: var(--font-caption);
+  font-weight: 700;
   color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
   margin-bottom: var(--space-6);
 }
 
@@ -208,9 +222,11 @@ function rangeText(r) {
   flex-direction: column;
   gap: var(--space-4);
   padding: var(--space-7);
-  background: rgba(6, 182, 212, 0.05);
-  border: 1px solid rgba(6, 182, 212, 0.2);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
+  background:
+    linear-gradient(var(--glass-bg-strong), var(--glass-bg-strong)) padding-box,
+    var(--gradient-agent) border-box;
 }
 .weekly__suggestions li {
   font: var(--font-secondary);
@@ -226,19 +242,41 @@ function rangeText(r) {
   font-size: 12px;
 }
 
+/* ===== 历史周报时间轴（左侧竖轨 + 节点圆点） ===== */
 .weekly__history {
+  grid-area: rail;
   position: sticky;
-  top: 88px;
+  top: 96px;
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 .weekly__history-title { font: var(--font-h3); margin-bottom: var(--space-3); }
+
+.weekly__timeline {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-left: var(--space-6);
+}
+.weekly__timeline::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 10px;
+  bottom: 10px;
+  width: 1.5px;
+  background: linear-gradient(180deg, var(--accent-blue), var(--glass-border));
+  border-radius: 1px;
+}
+
 .weekly__history-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-5) var(--space-7);
+  padding: var(--space-5) var(--space-6);
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
@@ -248,16 +286,36 @@ function rangeText(r) {
   transition: all var(--transition-fast);
 }
 .weekly__history-item:hover { background: var(--glass-hover); }
+.weekly__timeline-dot {
+  position: absolute;
+  left: calc(-1 * var(--space-6) - 5.5px);
+  top: 20px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--accent-blue);
+}
 .weekly__history-item.is-active {
   border-color: var(--accent-blue);
-  box-shadow: 0 0 12px rgba(59, 130, 246, 0.25);
+  background: var(--glass-bg-strong);
+  box-shadow: 0 0 12px rgba(37, 99, 235, 0.2), inset 0 1px 0 var(--glass-highlight);
 }
+.weekly__history-item.is-active .weekly__timeline-dot {
+  background: var(--accent-blue);
+  box-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
+}
+.weekly__history-range { font-weight: 600; }
 
 @media (max-width: 1024px) {
-  .weekly { grid-template-columns: 1fr; }
+  .weekly {
+    grid-template-columns: 1fr;
+    grid-template-areas: 'doc' 'rail';
+  }
   .weekly__history { position: static; }
 }
 @media (max-width: 768px) {
   .weekly__kpis { grid-template-columns: repeat(2, 1fr); }
+  .weekly__main { padding: var(--space-9); }
 }
 </style>

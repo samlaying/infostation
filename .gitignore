@@ -4,3 +4,4 @@ server/data/
 server/.env
 *.log
 .DS_Store
+.zcode/

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import { useItemsStore } from '../stores/items';
 import { useStatsStore } from '../stores/stats';
 import { api } from '../api';
@@ -9,12 +9,25 @@ import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
 import CategoryBars from '../components/CategoryBars.vue';
 import TagCloud from '../components/TagCloud.vue';
+import TopicDock from '../components/TopicDock.vue';
+import SegmentTabs from '../components/SegmentTabs.vue';
 
 const itemsStore = useItemsStore();
 const statsStore = useStatsStore();
 
 const detailItem = ref(null);
 const pagination = ref({ page: 1 });
+
+// 三态透镜：全部 / 仅看代试 / 仅看内容（化解两条线的“半隔离”观感）
+const LENS = [
+  { key: '', label: '全部视图', icon: '🌐' },
+  { key: 'trial', label: '仅看代试', icon: '⚡' },
+  { key: 'media', label: '仅看内容', icon: '✍️' },
+];
+const lens = computed({
+  get: () => itemsStore.filters.line,
+  set: (v) => applyFilters({ line: v }),
+});
 
 onMounted(async () => {
   await Promise.all([itemsStore.load(1), statsStore.load()]);
@@ -28,6 +41,10 @@ watch(
 
 function applyFilters(patch) {
   Object.assign(itemsStore.filters, patch);
+}
+
+function onTopicSelect(topicId) {
+  applyFilters({ topic_id: topicId ?? '', q: '' }); // 切主题清空关键词，避免过滤打架
 }
 
 async function openDetail(item) {
@@ -44,10 +61,20 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
 
 <template>
   <div class="knowledge">
+    <!-- 左：主题抽屉（长期主题，显式创建的空间概念） -->
+    <TopicDock :active="itemsStore.filters.topic_id ? Number(itemsStore.filters.topic_id) : null" @select="onTopicSelect" />
+
     <div class="knowledge__main">
+      <!-- 三态透镜 -->
+      <div class="knowledge__lens">
+        <SegmentTabs v-model="lens" :tabs="LENS" />
+        <span class="knowledge__lens-count">{{ itemsStore.total }} 张卡片</span>
+      </div>
+
       <FilterBar
         class="glass-panel knowledge__filterbar"
         :filters="itemsStore.filters"
+        hide-line
         @update:filters="applyFilters"
       />
 
@@ -119,12 +146,24 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
 <style scoped>
 .knowledge {
   display: grid;
-  grid-template-columns: 1fr 340px;
-  gap: var(--space-9);
+  grid-template-columns: 216px minmax(0, 1fr) 340px;
+  gap: var(--space-8);
   align-items: start;
 }
 
 .knowledge__main { min-width: 0; }
+
+/* 三态透镜行 */
+.knowledge__lens {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-5);
+  margin-bottom: var(--space-6);
+  flex-wrap: wrap;
+}
+.knowledge__lens-count { font: var(--font-caption); color: var(--text-muted); }
+
 .knowledge__filterbar { margin-bottom: var(--space-8); }
 
 .knowledge__grid {
@@ -181,6 +220,10 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
   text-overflow: ellipsis;
 }
 
+@media (max-width: 1280px) {
+  .knowledge { grid-template-columns: minmax(0, 1fr) 340px; }
+  .knowledge > :first-child { display: none; } /* 窄屏收起主题抽屉 */
+}
 @media (max-width: 1024px) {
   .knowledge { grid-template-columns: 1fr; }
   .knowledge__sidebar { position: static; order: -1; }

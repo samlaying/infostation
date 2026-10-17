@@ -1,5 +1,20 @@
 // ===== 领域枚举与展示映射（与后端 server/src/constants.js 一致）=====
 
+// 产品线：正交于 category 的维度
+// trial = TODO 线（值得试的东西 → 行动）；media = 自媒体线（话题素材 → 内容工序）
+export const LINE_MAP = {
+  trial: { label: 'TODO 线', short: '代试', icon: '🚀', color: 'var(--accent-blue)', desc: '值得试的东西 → 结论 + 行动项' },
+  media: { label: '自媒体线', short: '内容生产', icon: '✍️', color: 'var(--accent-purple)', desc: '话题/素材 → 选题库 + 内容工序' },
+};
+
+// 自媒体线卡片角色（用标签表达，与后端 MEDIA_ROLE_TAGS 及 skill 约定一致）
+export const MEDIA_ROLE_MAP = {
+  素材: { icon: '📥', label: '素材' },
+  选题: { icon: '💡', label: '选题' },
+  发布包: { icon: '📦', label: '发布包' },
+  已发布: { icon: '🚀', label: '已发布' },
+};
+
 export const CATEGORY_MAP = {
   career: { label: '职场提升', icon: '🚀', color: 'var(--accent-blue)' },
   media: { label: '自媒体', icon: '📱', color: 'var(--accent-purple)' },

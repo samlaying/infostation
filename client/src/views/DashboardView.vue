@@ -4,9 +4,8 @@ import { useRouter } from 'vue-router';
 import { useItemsStore } from '../stores/items';
 import { useTodosStore } from '../stores/todos';
 import { useStatsStore } from '../stores/stats';
-import { CATEGORY_MAP, PRIORITY_MAP, timeAgo } from '../constants';
+import { CATEGORY_MAP, PRIORITY_MAP, timeAgo, LINE_MAP } from '../constants';
 import QuickInput from '../components/QuickInput.vue';
-import StatCard from '../components/StatCard.vue';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
 
@@ -21,7 +20,8 @@ const detailItem = ref(null);
 async function loadAll() {
   const [itemsRes] = await Promise.all([
     itemsStore.load(1),
-    todosStore.load({ view: 'today' }),
+    // 工作台的今日 TODO 只显示 TODO 线（行动项）；内容工序在「内容生产」视图
+    todosStore.load({ view: 'today', line: 'trial' }),
     statsStore.load(),
   ]);
   // 最近处理取前 5（items store 已按时间倒序）
@@ -39,13 +39,23 @@ const todayDone = computed(
 );
 const todayTotal = computed(() => todosStore.list.length);
 
+// 顶栏微型胶囊状态（规格：替代原四张统计卡，一行看全局）
+const microStats = computed(() => {
+  const s = statsStore.data;
+  if (!s) return [];
+  return [
+    { icon: '⚡', label: '今日待办', value: todayTotal.value },
+    { icon: '🏆', label: '本周完成', value: s.todos.week_done },
+    { icon: '📊', label: '信息总量', value: s.items.total },
+  ];
+});
+
 // Agent 建议（规则：对应 PRD 九、智能建议）
 const agentSuggestion = computed(() => {
   const s = statsStore.data;
   if (!s) return null;
   const goals = s.goal_progress || [];
   // 高优先级积压提醒
-  const backlog = goals.reduce((a, g) => a + g.total - g.done, 0);
   const worst = [...goals].sort((a, b) => (b.total - b.done) - (a.total - a.done))[0];
   if (worst && worst.total - worst.done >= 5) {
     return {
@@ -81,26 +91,21 @@ async function openDetailById(id) {
 
 <template>
   <div class="dashboard">
-    <!-- 快速输入 -->
+    <!-- C 位：流光玻璃命令框 -->
     <QuickInput @processed="onProcessed" />
 
-    <!-- 统计行 -->
-    <div v-if="statsStore.data" class="dashboard__stats">
-      <StatCard
-        v-for="(s, i) in [
-          { label: '总信息量', value: statsStore.data.items.total, icon: '📊', deltaText: `+${statsStore.data.items.today_new} 今日`, deltaTone: 'up', gradient: 'var(--gradient-1)' },
-          { label: 'TODO', value: statsStore.data.todos.total, icon: '✅', deltaText: `完成 ${Math.round(statsStore.data.todos.completion_rate * 100)}%`, deltaTone: 'flat', gradient: 'var(--gradient-2)' },
-          { label: '今日新增', value: statsStore.data.items.today_new, icon: '📥', deltaText: `昨日 ${statsStore.data.items.yesterday_new}`, deltaTone: 'flat', gradient: 'var(--gradient-3)' },
-          { label: '本周完成', value: statsStore.data.todos.week_done, icon: '🎯', deltaText: `完成率 ${Math.round(statsStore.data.todos.week_rate * 100)}%`, deltaTone: 'up', gradient: 'var(--gradient-success)' },
-        ]"
-        :key="s.label"
-        v-bind="s"
-        :index="i"
-      />
+    <!-- 微型胶囊状态行（替代原统计卡） -->
+    <div v-if="microStats.length" class="dashboard__micro">
+      <span v-for="m in microStats" :key="m.label" class="dashboard__micro-item">
+        <span class="dashboard__micro-icon">{{ m.icon }}</span>
+        <span class="dashboard__micro-label">{{ m.label }}</span>
+        <b class="dashboard__micro-value">{{ m.value }}</b>
+      </span>
     </div>
 
-    <div class="dashboard__grid">
-      <!-- 今日 TODO -->
+    <!-- Bento Grid：左栏今日 TODO（50%），右侧建议 + 最近处理 -->
+    <div class="dashboard__bento">
+      <!-- 左栏 · 今日 TODO（line=trial） -->
       <section class="glass-panel dashboard__todos">
         <div class="panel-header">
           <h2>✅ 今日 TODO（{{ todayDone }}/{{ todayTotal }}）</h2>
@@ -123,7 +128,25 @@ async function openDetailById(id) {
         />
       </section>
 
-      <!-- 最近处理 -->
+      <!-- 右上 · Agent 建议（紫粉极光玻璃便签） -->
+      <section v-if="agentSuggestion" class="dashboard__advice">
+        <div class="dashboard__advice-inner">
+          <div class="dashboard__advice-head">
+            <span class="dashboard__advice-icon">{{ agentSuggestion.icon }}</span>
+            <span class="dashboard__advice-label">私秘建议 · Agent</span>
+          </div>
+          <p class="dashboard__advice-text">{{ agentSuggestion.text }}</p>
+          <button
+            v-if="agentSuggestion.action"
+            class="btn btn--glass btn--sm dashboard__advice-btn"
+            @click="router.push(agentSuggestion.action.to)"
+          >
+            {{ agentSuggestion.action.label }} →
+          </button>
+        </div>
+      </section>
+
+      <!-- 右下 · 最近处理（带业务线色点） -->
       <section class="glass-panel dashboard__recent">
         <div class="panel-header">
           <h2>🧠 最近处理</h2>
@@ -134,29 +157,17 @@ async function openDetailById(id) {
             <span class="dashboard__recent-cat">{{ CATEGORY_MAP[it.primary_category]?.icon }}</span>
             <span class="dashboard__recent-title">{{ it.title }}</span>
             <span v-if="it.todo_count" class="dashboard__recent-badge">✅ {{ it.todo_count }}</span>
-            <span class="priority-dot" :class="`priority-dot--${it.priority}`" :title="`${PRIORITY_MAP[it.priority]?.label}优先级`" />
+            <span
+              class="line-dot"
+              :class="`line-dot--${it.line || 'trial'}`"
+              :title="LINE_MAP[it.line || 'trial']?.label"
+            />
             <span class="timestamp">{{ timeAgo(it.created_at) }}</span>
           </button>
         </div>
         <EmptyState v-else icon="📭" title="还没有处理记录" desc="把链接或文字粘贴到上方输入框试试" />
       </section>
     </div>
-
-    <!-- Agent 建议 -->
-    <section v-if="agentSuggestion" class="glass-panel dashboard__advice">
-      <div class="dashboard__advice-icon">{{ agentSuggestion.icon }}</div>
-      <div class="dashboard__advice-body">
-        <div class="dashboard__advice-label">私秘建议</div>
-        <p class="dashboard__advice-text">{{ agentSuggestion.text }}</p>
-      </div>
-      <button
-        v-if="agentSuggestion.action"
-        class="btn btn--glass btn--sm"
-        @click="router.push(agentSuggestion.action.to)"
-      >
-        {{ agentSuggestion.action.label }}
-      </button>
-    </section>
 
     <ItemDetailModal
       v-if="detailItem"
@@ -173,25 +184,44 @@ async function openDetailById(id) {
 .dashboard {
   display: flex;
   flex-direction: column;
-  gap: var(--space-9);
-}
-
-.dashboard__stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: var(--space-7);
 }
 
-.dashboard__grid {
-  display: grid;
-  grid-template-columns: 5fr 7fr;
-  gap: var(--space-9);
+/* ===== 微型胶囊状态行 ===== */
+.dashboard__micro {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-5);
+  flex-wrap: wrap;
 }
+.dashboard__micro-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 6px 14px;
+  font: var(--font-caption);
+  color: var(--text-secondary);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-full);
+  backdrop-filter: blur(var(--blur-base));
+  -webkit-backdrop-filter: blur(var(--blur-base));
+}
+.dashboard__micro-icon { font-size: 12px; }
+.dashboard__micro-value { color: var(--text-primary); font-weight: 700; }
 
-.dashboard__todos,
-.dashboard__recent {
-  padding: var(--space-11);
+/* ===== Bento Grid ===== */
+.dashboard__bento {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-areas:
+    'todos advice'
+    'todos recent';
+  gap: var(--space-7);
+  align-items: stretch;
 }
+.dashboard__todos { grid-area: todos; padding: var(--space-11); }
+.dashboard__recent { grid-area: recent; padding: var(--space-11); }
 
 .panel-more { font: var(--font-caption); color: var(--text-secondary); }
 .panel-more:hover { color: var(--accent-cyan); }
@@ -204,7 +234,9 @@ async function openDetailById(id) {
   padding: var(--space-4) var(--space-6);
   background: var(--glass-bg-faint);
   border-radius: var(--radius-sm);
+  transition: background var(--transition-fast), transform var(--transition-fast);
 }
+.dashboard__todo:hover { background: var(--glass-hover); }
 .dashboard__todo-title {
   flex: 1;
   font: var(--font-secondary);
@@ -215,6 +247,44 @@ async function openDetailById(id) {
 }
 .dashboard__todo-cat { font: var(--font-micro); }
 
+/* ===== Agent 建议：紫粉极光渐变描边玻璃便签 ===== */
+.dashboard__advice {
+  grid-area: advice;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(var(--glass-bg), var(--glass-bg)) padding-box,
+    var(--gradient-agent) border-box;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 8px 32px rgba(147, 51, 234, 0.12), inset 0 1px 0 var(--glass-highlight);
+}
+.dashboard__advice-inner { padding: var(--space-9) var(--space-11); }
+.dashboard__advice-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.dashboard__advice-icon { font-size: 22px; }
+.dashboard__advice-label {
+  font: var(--font-caption);
+  background: var(--gradient-agent);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.dashboard__advice-text {
+  font: var(--font-secondary);
+  line-height: 1.7;
+  color: var(--text-primary);
+  margin-bottom: var(--space-5);
+}
+.dashboard__advice-btn { pointer-events: auto; }
+
+/* ===== 最近处理 ===== */
 .dashboard__recent-list {
   display: flex;
   flex-direction: column;
@@ -242,32 +312,30 @@ async function openDetailById(id) {
 .dashboard__recent-badge {
   font: var(--font-micro);
   color: var(--accent-green);
-  background: rgba(16, 185, 129, 0.1);
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: rgba(5, 150, 105, 0.1);
+  border: 1px solid rgba(5, 150, 105, 0.25);
   padding: 2px 8px;
   border-radius: var(--radius-full);
 }
 
-.dashboard__advice {
-  display: flex;
-  align-items: center;
-  gap: var(--space-7);
-  padding: var(--space-9) var(--space-11);
-  border-left: 3px solid;
-  border-image: var(--gradient-2) 1;
+/* ===== 业务线色点（蓝=代试 / 橙=内容） ===== */
+.line-dot {
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  border-radius: 50%;
 }
-.dashboard__advice-icon { font-size: 26px; }
-.dashboard__advice-body { flex: 1; }
-.dashboard__advice-label {
-  font: var(--font-caption);
-  color: var(--accent-cyan);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: var(--space-2);
-}
-.dashboard__advice-text { font: var(--font-secondary); line-height: 1.7; color: var(--text-primary); }
+.line-dot--trial { background: var(--line-trial); box-shadow: 0 0 6px rgba(8, 145, 178, 0.5); }
+.line-dot--media { background: var(--line-media); box-shadow: 0 0 6px rgba(234, 88, 12, 0.5); }
 
 @media (max-width: 1024px) {
-  .dashboard__grid { grid-template-columns: 1fr; }
+  .dashboard__bento {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'todos'
+      'advice'
+      'recent';
+  }
+  .dashboard__micro { justify-content: flex-start; }
 }
 </style>

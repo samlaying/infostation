@@ -2,7 +2,7 @@
 
 import { Router } from 'express';
 import { db, rowToItem, rowToTodo } from '../db.js';
-import { isValidCategory, isValidContentType, isValidPriority, CATEGORIES, CONTENT_TYPES, PRIORITIES, SOURCE_PLATFORMS } from '../constants.js';
+import { isValidCategory, isValidContentType, isValidPriority, isValidLine, isValidItemType, CATEGORIES, CONTENT_TYPES, PRIORITIES, SOURCE_PLATFORMS } from '../constants.js';
 
 export const itemsRouter = Router();
 
@@ -15,6 +15,10 @@ itemsRouter.get('/items', (req, res) => {
     platform,
     tag,
     has_todo,
+    line,
+    topic_id,
+    item_type,
+    parent_item_id,
     q,
     sort = 'time',
     page = '1',
@@ -27,6 +31,11 @@ itemsRouter.get('/items', (req, res) => {
   if (isValidCategory(category)) { where.push('i.primary_category = @category'); params.category = category; }
   if (isValidContentType(content_type)) { where.push('i.content_type = @content_type'); params.content_type = content_type; }
   if (isValidPriority(priority)) { where.push('i.priority = @priority'); params.priority = priority; }
+  if (isValidLine(line)) { where.push('i.line = @line'); params.line = line; }
+  if (topic_id) { where.push('i.topic_id = @topic_id'); params.topic_id = Number(topic_id); }
+  if (isValidItemType(item_type)) { where.push('i.item_type = @item_type'); params.item_type = item_type; }
+  if (parent_item_id === 'none') { where.push('i.parent_item_id IS NULL'); }
+  else if (parent_item_id) { where.push('i.parent_item_id = @parent'); params.parent = parent_item_id; }
   if (SOURCE_PLATFORMS.includes(platform)) { where.push('i.source_platform = @platform'); params.platform = platform; }
   if (tag) { where.push("i.tags LIKE @tag"); params.tag = `%"${String(tag).replace(/[%_"]/g, '')}"%`; }
   if (has_todo === 'yes') { where.push('EXISTS (SELECT 1 FROM todos t WHERE t.source_item_id = i.id)'); }
@@ -94,11 +103,29 @@ itemsRouter.patch('/items/:id', (req, res) => {
   if (isValidCategory(b.primary_category)) updates.primary_category = b.primary_category;
   if (isValidContentType(b.content_type)) { updates.content_type = b.content_type; updates.secondary_category = b.content_type; }
   if (isValidPriority(b.priority)) updates.priority = b.priority;
+  if (isValidLine(b.line)) updates.line = b.line;
   if (Array.isArray(b.tags)) updates.tags = JSON.stringify(b.tags.map((t) => String(t).slice(0, 20)).slice(0, 8));
   if (typeof b.full_content === 'string') updates.full_content = b.full_content;
+  // v2.0：主题归属 / 卡片角色 / 父子血缘
+  if (b.topic_id === null) updates.topic_id = null;
+  else if (Number.isFinite(Number(b.topic_id))) {
+    if (!db.prepare('SELECT id FROM topics WHERE id = ?').get(Number(b.topic_id))) {
+      return res.status(400).json({ error: '主题不存在' });
+    }
+    updates.topic_id = Number(b.topic_id);
+  }
+  if (isValidItemType(b.item_type)) updates.item_type = b.item_type;
+  if (b.parent_item_id === null) updates.parent_item_id = null;
+  else if (typeof b.parent_item_id === 'string' && b.parent_item_id !== req.params.id) {
+    if (!db.prepare('SELECT id FROM items WHERE id = ?').get(b.parent_item_id)) {
+      return res.status(400).json({ error: '父卡片不存在' });
+    }
+    updates.parent_item_id = b.parent_item_id;
+  }
 
   if (!Object.keys(updates).length) return res.status(400).json({ error: '没有可更新的字段' });
 
+  updates.updated_at = new Date().toISOString();
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE items SET ${setSql} WHERE id = @id`).run({ ...updates, id: req.params.id });
   res.json(rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id)));

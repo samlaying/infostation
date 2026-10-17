@@ -11,6 +11,17 @@ import EmptyState from '../components/EmptyState.vue';
 const statsStore = useStatsStore();
 const trendRange = ref(7); // 7 | 30
 
+// 双轨拆分（v2.0 起后端 stats 直接返回分线口径）：TODO 总数 = ⚡行动 + 🔨内容工序
+const todoSplit = computed(() => {
+  const t = statsStore.data?.todos;
+  return t && Number.isFinite(t.trial_count)
+    ? {
+        a: { label: '⚡ 行动', value: t.trial_count, color: 'var(--line-trial)' },
+        b: { label: '🔨 工序', value: t.media_count, color: 'var(--line-media)' },
+      }
+    : null;
+});
+
 onMounted(() => statsStore.load());
 
 const series = computed(() =>
@@ -25,7 +36,7 @@ const series = computed(() =>
       <StatCard
         v-for="(s, i) in [
           { label: '总信息量', value: statsStore.data.items.total, icon: '📊', deltaText: `本月 +${statsStore.data.items.month_new}`, deltaTone: 'up', gradient: 'var(--gradient-1)' },
-          { label: 'TODO 总数', value: statsStore.data.todos.total, icon: '📋', deltaText: `待执行 ${statsStore.data.todos.pending}`, deltaTone: 'flat', gradient: 'var(--gradient-2)' },
+          { label: 'TODO 总数', value: statsStore.data.todos.total, icon: '📋', deltaText: `待执行 ${statsStore.data.todos.pending}`, deltaTone: 'flat', gradient: 'var(--gradient-2)', split: todoSplit },
           { label: 'TODO 完成率', value: `${Math.round(statsStore.data.todos.completion_rate * 100)}%`, icon: '✅', deltaText: `本周完成 ${statsStore.data.todos.week_done} 条`, deltaTone: 'up', gradient: 'var(--gradient-3)' },
           { label: '本周完成率', value: `${Math.round(statsStore.data.todos.week_rate * 100)}%`, icon: '🎯', deltaText: `本周新建 ${statsStore.data.todos.week_created}`, deltaTone: 'flat', gradient: 'var(--gradient-success)' },
         ]"

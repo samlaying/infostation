@@ -78,6 +78,22 @@ export const createTodo = (body) => api.post('/todos', body);
 export const patchTodo = (id, body) => api.patch(`/todos/${id}`, body);
 export const deleteTodo = (id) => api.delete(`/todos/${id}`);
 
+// ===== v2.0：主题 / 资产 / 帖子 =====
+export const fetchTopics = (params) => api.get('/topics', params);
+export const createTopic = (body) => api.post('/topics', body);
+export const patchTopic = (id, body) => api.patch(`/topics/${id}`, body);
+export const deleteTopic = (id) => api.delete(`/topics/${id}`);
+
+export const fetchAssets = (params) => api.get('/assets', params);
+export const createAsset = (body) => api.post('/assets', body);
+export const patchAsset = (id, body) => api.patch(`/assets/${id}`, body);
+export const deleteAsset = (id) => api.delete(`/assets/${id}`);
+
+export const fetchPosts = (params) => api.get('/posts', params);
+export const createPost = (body) => api.post('/posts', body);
+export const patchPost = (id, body) => api.patch(`/posts/${id}`, body);
+export const deletePost = (id) => api.delete(`/posts/${id}`);
+
 export const fetchStats = () => api.get('/stats');
 export const fetchWeeklyReport = (refresh) => api.get('/weekly-report', refresh ? { refresh: 1 } : undefined);
 export const fetchWeeklyReports = () => api.get('/weekly-reports');
