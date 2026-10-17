@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """cli-anything-infostation — InfoStation 的 Agent 原生 CLI。
 
-覆盖网页端全部操作：录入处理、知识卡片、TODO 面板、数据看板、周报、设置、备份。
+覆盖网页端全部操作：录入处理、知识卡片、TODO 面板、主题（v2）、资产（v2）、
+帖子（v2）、数据看板、周报、设置、备份。
 输出恒为 JSON（面向 Agent 消费）；错误输出到 stderr 并以非零码退出。
 
 用法示例：
@@ -9,6 +10,8 @@
   cli-anything-infostation process add "一段文字或URL"
   cli-anything-infostation items list --q 标题公式
   cli-anything-infostation todos list --view today
+  cli-anything-infostation topics list
+  cli-anything-infostation topics create "新主题" --icon 🔧 --line trial
 """
 
 import argparse
@@ -61,6 +64,7 @@ def cmd_process(args, cfg):
             preferred_category=args.category,
             preferred_priority=args.priority,
             user_note=args.note,
+            line=args.line,
         ))
     if args.process_cmd == "url":
         return client.post("/api/v1/extract", cfg, {"url": args.url})
@@ -71,7 +75,8 @@ def cmd_items(args, cfg):
         return client.get("/api/v1/items", cfg, **clean(
             q=args.q, category=args.category, content_type=args.type,
             priority=args.priority, platform=args.platform, tag=args.tag,
-            has_todo=args.todo, sort=args.sort, page=args.page, page_size=args.size,
+            has_todo=args.todo, line=args.line, topic_id=args.topic,
+            item_type=args.item_type, sort=args.sort, page=args.page, page_size=args.size,
         ))
     if args.items_cmd == "get":
         return client.get(f"/api/v1/items/{args.id}", cfg)
@@ -79,8 +84,13 @@ def cmd_items(args, cfg):
         body = clean(
             title=args.title, summary=args.summary,
             primary_category=args.category, content_type=args.type,
-            priority=args.priority,
+            priority=args.priority, line=args.line,
+            item_type=args.item_type, parent_item_id=args.parent,
         )
+        if args.topic is not None:
+            body["topic_id"] = None if args.topic == "" else int(args.topic)
+        if args.parent is not None and args.parent == "":
+            body["parent_item_id"] = None
         if args.tags is not None:
             body["tags"] = [t.strip() for t in args.tags.split(",") if t.strip()]
         return client.patch(f"/api/v1/items/{args.id}", cfg, body)
@@ -92,18 +102,19 @@ def cmd_todos(args, cfg):
     if args.todos_cmd == "list":
         return client.get("/api/v1/todos", cfg, **clean(
             view=args.view, category=args.category, priority=args.priority,
-            status=args.status, source_item_id=args.source_item,
+            status=args.status, source_item_id=args.source_item, line=args.line,
+            topic_id=args.topic,
         ))
     if args.todos_cmd == "create":
         return client.post("/api/v1/todos", cfg, clean(
             title=args.title, description=args.desc, category=args.category,
             priority=args.priority, actual_deadline=args.deadline,
-            source_item_id=args.source_item,
+            source_item_id=args.source_item, line=args.line,
         ))
     if args.todos_cmd == "update":
         body = clean(
             status=args.status, title=args.title, priority=args.priority,
-            category=args.category, actual_deadline=args.deadline,
+            category=args.category, actual_deadline=args.deadline, line=args.line,
         )
         if args.deadline is not None and args.deadline == "":
             body["actual_deadline"] = None  # 空串表示清除截止日期
@@ -114,6 +125,77 @@ def cmd_todos(args, cfg):
 
 def cmd_stats(args, cfg):
     return client.get("/api/v1/stats", cfg)
+
+
+# ---------- v2.0：主题 / 资产 / 帖子 ----------
+
+def cmd_topics(args, cfg):
+    if args.topics_cmd == "list":
+        return client.get("/api/v1/topics", cfg, **clean(status=args.status))
+    if args.topics_cmd == "create":
+        return client.post("/api/v1/topics", cfg, clean(
+            name=args.name, icon=args.icon, color=args.color,
+            default_line=args.line, description=args.desc, sort_order=args.sort,
+        ))
+    if args.topics_cmd == "update":
+        body = clean(
+            name=args.name, icon=args.icon, color=args.color,
+            default_line=args.line, description=args.desc, status=args.status,
+        )
+        if args.sort is not None:
+            body["sort_order"] = args.sort
+        return client.patch(f"/api/v1/topics/{args.id}", cfg, body)
+    if args.topics_cmd == "delete":
+        return client.delete(f"/api/v1/topics/{args.id}", cfg)
+
+
+def cmd_assets(args, cfg):
+    if args.assets_cmd == "list":
+        return client.get("/api/v1/assets", cfg, **clean(
+            item_id=args.item, todo_id=args.todo, type=args.type,
+        ))
+    if args.assets_cmd == "add":
+        return client.post("/api/v1/assets", cfg, clean(
+            item_id=args.item, todo_id=args.todo, asset_type=args.type,
+            local_path=args.local, remote_url=args.url, source_url=args.source,
+            prompt=args.prompt,
+            metadata=json.loads(args.metadata) if args.metadata else None,
+        ))
+    if args.assets_cmd == "update":
+        body = clean(local_path=args.local, remote_url=args.url, prompt=args.prompt)
+        if args.metadata:
+            body["metadata"] = json.loads(args.metadata)
+        return client.patch(f"/api/v1/assets/{args.id}", cfg, body)
+    if args.assets_cmd == "delete":
+        return client.delete(f"/api/v1/assets/{args.id}", cfg)
+
+
+def cmd_posts(args, cfg):
+    if args.posts_cmd == "list":
+        return client.get("/api/v1/posts", cfg, **clean(
+            source_item_id=args.source, topic_id=args.topic,
+            platform=args.platform, status=args.status,
+        ))
+    if args.posts_cmd == "create":
+        return client.post("/api/v1/posts", cfg, clean(
+            source_item_id=args.source, topic_id=args.topic, platform=args.platform,
+            title=args.title, content_body=args.body,
+            asset_ids=_parse_ids(args.assets),
+        ))
+    if args.posts_cmd == "update":
+        body = clean(
+            title=args.title, content_body=args.body, platform=args.platform,
+            status=args.status, published_url=args.url,
+        )
+        if args.assets is not None:
+            body["asset_ids"] = _parse_ids(args.assets)
+        return client.patch(f"/api/v1/posts/{args.id}", cfg, body)
+    if args.posts_cmd == "delete":
+        return client.delete(f"/api/v1/posts/{args.id}", cfg)
+
+
+def _parse_ids(s):
+    return [int(x) for x in s.split(",") if x.strip()] if s else None
 
 
 def cmd_weekly(args, cfg):
@@ -190,6 +272,8 @@ def build_parser():
     s.add_argument("--priority", choices=["high", "medium", "low"], help="预设优先级")
     s.add_argument("--source-type", choices=["url", "text", "manual"])
     s.add_argument("--note", help="用户备注")
+    s.add_argument("--line", choices=["trial", "media"],
+                   help="产品线：trial=TODO线(值得试的东西→行动，默认) | media=自媒体线(话题素材→内容工序)")
     s = spp.add_parser("url", help="URL 抓取预览（不落库）")
     s.add_argument("url")
 
@@ -204,6 +288,9 @@ def build_parser():
     s.add_argument("--platform")
     s.add_argument("--tag")
     s.add_argument("--todo", choices=["yes", "no"], help="是否有 TODO")
+    s.add_argument("--line", choices=["trial", "media"], help="按产品线过滤")
+    s.add_argument("--topic", type=int, help="按主题 id 过滤（v2）")
+    s.add_argument("--item-type", choices=["material", "idea", "bundle"], help="按卡片角色过滤（v2）")
     s.add_argument("--sort", choices=["time", "priority", "related"])
     s.add_argument("--page", type=int)
     s.add_argument("--size", type=int, help="每页条数（默认 24）")
@@ -217,6 +304,10 @@ def build_parser():
     s.add_argument("--type", dest="type")
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--tags", help="逗号分隔，如：副业,变现")
+    s.add_argument("--line", choices=["trial", "media"], help="切换产品线")
+    s.add_argument("--topic", help="主题 id（v2）；传空串解除归属")
+    s.add_argument("--item-type", choices=["material", "idea", "bundle"], help="卡片角色（v2）")
+    s.add_argument("--parent", help="父卡片 id（v2 血缘：bundle→idea→material）；传空串清除")
     s = spp.add_parser("delete", help="删除")
     s.add_argument("id")
 
@@ -229,6 +320,8 @@ def build_parser():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--status", choices=["pending", "in_progress", "done", "archived"])
     s.add_argument("--source-item", help="按来源卡片过滤")
+    s.add_argument("--line", choices=["trial", "media"], help="按产品线过滤：trial=行动项 | media=内容工序")
+    s.add_argument("--topic", type=int, help="按主题 id 过滤（v2）")
     s = spp.add_parser("create", help="手动创建")
     s.add_argument("title")
     s.add_argument("--desc")
@@ -236,6 +329,7 @@ def build_parser():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--deadline", help="YYYY-MM-DD")
     s.add_argument("--source-item")
+    s.add_argument("--line", choices=["trial", "media"], help="产品线；缺省继承来源卡片，再缺省 trial")
     s = spp.add_parser("update", help="更新（完成/归档/改期等）")
     s.add_argument("id")
     s.add_argument("--status", choices=["pending", "in_progress", "done", "archived"])
@@ -243,6 +337,7 @@ def build_parser():
     s.add_argument("--priority", choices=["high", "medium", "low"])
     s.add_argument("--category")
     s.add_argument("--deadline", help="YYYY-MM-DD；传空串清除")
+    s.add_argument("--line", choices=["trial", "media"], help="切换产品线")
     s = spp.add_parser("delete", help="删除")
     s.add_argument("id")
 
@@ -253,6 +348,81 @@ def build_parser():
     s = spp.add_parser("show", help="本周周报")
     s.add_argument("--refresh", action="store_true", help="强制重新生成")
     spp.add_parser("history", help="历史周报")
+
+    # topics（v2）
+    sp = sub.add_parser("topics", help="主题（v2：主题=目标，一等公民）")
+    spp = sp.add_subparsers(dest="topics_cmd", required=True)
+    s = spp.add_parser("list", help="列表（含卡片/任务计数与最近活跃）")
+    s.add_argument("--status", choices=["active", "archived"])
+    s = spp.add_parser("create", help="新建主题")
+    s.add_argument("name", help="主题名（唯一）")
+    s.add_argument("--icon", help="emoji 图标，默认 📁")
+    s.add_argument("--color", help="十六进制色值")
+    s.add_argument("--line", choices=["trial", "media"], help="默认产品线，默认 trial")
+    s.add_argument("--desc", help="描述（给 Agent 的主题提示）")
+    s.add_argument("--sort", type=int, help="排序权重")
+    s = spp.add_parser("update", help="更新（改名/图标/状态/排序/默认线）")
+    s.add_argument("id", type=int)
+    s.add_argument("--name")
+    s.add_argument("--icon")
+    s.add_argument("--color")
+    s.add_argument("--line", choices=["trial", "media"])
+    s.add_argument("--desc")
+    s.add_argument("--status", choices=["active", "archived"])
+    s.add_argument("--sort", type=int)
+    s = spp.add_parser("delete", help="删除主题（卡片保留，仅解除归属）")
+    s.add_argument("id", type=int)
+
+    # assets（v2）
+    sp = sub.add_parser("assets", help="媒体资产（v2：截图/生图/上传）")
+    spp = sp.add_subparsers(dest="assets_cmd", required=True)
+    s = spp.add_parser("list", help="列表")
+    s.add_argument("--item", help="按卡片 id 过滤")
+    s.add_argument("--todo", help="按工序 id 过滤")
+    s.add_argument("--type", choices=["screenshot", "ai_image", "upload", "video"])
+    s = spp.add_parser("add", help="登记资产")
+    s.add_argument("--item", required=True, help="所属卡片 id")
+    s.add_argument("--type", required=True, choices=["screenshot", "ai_image", "upload", "video"])
+    s.add_argument("--todo", help="产出该资产的工序 id")
+    s.add_argument("--local", help="本地文件路径（与 --url 至少一个）")
+    s.add_argument("--url", help="图床/平台 URL")
+    s.add_argument("--source", help="截图源网页 URL")
+    s.add_argument("--prompt", help="AI 生图 Prompt")
+    s.add_argument("--metadata", help='JSON 字符串，如 \'{"w":1080}\'')
+    s = spp.add_parser("update", help="更新（如上传后回填 --url）")
+    s.add_argument("id", type=int)
+    s.add_argument("--local")
+    s.add_argument("--url")
+    s.add_argument("--prompt")
+    s.add_argument("--metadata")
+    s = spp.add_parser("delete", help="删除资产记录")
+    s.add_argument("id", type=int)
+
+    # posts（v2）
+    sp = sub.add_parser("posts", help="帖子（v2：多平台发布产出与回执）")
+    spp = sp.add_subparsers(dest="posts_cmd", required=True)
+    s = spp.add_parser("list", help="列表")
+    s.add_argument("--source", help="按来源卡片 id 过滤")
+    s.add_argument("--topic", type=int, help="按主题 id 过滤")
+    s.add_argument("--platform", choices=["xiaohongshu", "wechat", "x", "bilibili", "zhihu"])
+    s.add_argument("--status", choices=["draft", "ready", "publishing", "published", "failed"])
+    s = spp.add_parser("create", help="创建帖子草稿")
+    s.add_argument("--source", required=True, help="来源卡片 id（选题或素材）")
+    s.add_argument("title")
+    s.add_argument("--body", help="发布正文")
+    s.add_argument("--topic", type=int, help="主题 id")
+    s.add_argument("--platform", choices=["xiaohongshu", "wechat", "x", "bilibili", "zhihu"], help="默认 xiaohongshu")
+    s.add_argument("--assets", help="资产 id 逗号分隔（决定配图顺序），如 3,1,5")
+    s = spp.add_parser("update", help="更新（状态机/回执）")
+    s.add_argument("id", type=int)
+    s.add_argument("--title")
+    s.add_argument("--body", dest="body", help="正文")
+    s.add_argument("--platform", choices=["xiaohongshu", "wechat", "x", "bilibili", "zhihu"])
+    s.add_argument("--status", choices=["draft", "ready", "publishing", "published", "failed"])
+    s.add_argument("--url", help="发布成功后的回执链接")
+    s.add_argument("--assets", help="资产 id 逗号分隔")
+    s = spp.add_parser("delete", help="删除帖子")
+    s.add_argument("id", type=int)
 
     # settings
     sp = sub.add_parser("settings", help="设置")
@@ -280,6 +450,7 @@ HANDLERS = {
     "config": cmd_config, "agent": cmd_agent, "process": cmd_process,
     "items": cmd_items, "todos": cmd_todos, "stats": cmd_stats,
     "weekly": cmd_weekly, "settings": cmd_settings, "backup": cmd_backup,
+    "topics": cmd_topics, "assets": cmd_assets, "posts": cmd_posts,
 }
 
 
