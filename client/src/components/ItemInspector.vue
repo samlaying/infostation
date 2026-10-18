@@ -529,8 +529,6 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
   line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 240px;
-  overflow-y: auto;
   padding: var(--space-6);
   background: var(--glass-bg-faint);
   border-radius: var(--radius-sm);
