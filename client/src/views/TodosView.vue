@@ -54,22 +54,26 @@ watch(view, load);
 useLiveReload(load, ['todos', 'topics']);
 
 // 主题看板：按长期主题分泳道（v2.1 取代旧 category 三列），未挂主题的进「未归档」
-const boardLanes = computed(() => [
-  ...topicsStore.active.map((t) => ({
+const boardLanes = computed(() => {
+  const lanes = topicsStore.active.map((t) => ({
     key: `t-${t.id}`,
     label: t.name,
     icon: t.icon,
     color: t.color,
     todos: todosStore.list.filter((x) => x.topic_id === t.id),
-  })),
-  {
-    key: '__none__',
-    label: '未挂主题',
-    icon: '🗂',
-    color: 'var(--text-secondary)',
-    todos: todosStore.list.filter((x) => !x.topic_id),
-  },
-]);
+  }));
+  const unfiled = todosStore.list.filter((x) => !x.topic_id);
+  if (unfiled.length) {
+    lanes.push({
+      key: '__none__',
+      label: '未挂主题',
+      icon: '🗂',
+      color: 'var(--text-secondary)',
+      todos: unfiled,
+    });
+  }
+  return lanes;
+});
 
 const doneStats = computed(() => {
   const done = todosStore.list;
@@ -152,7 +156,7 @@ async function openSource(todo) {
     <template v-else-if="view === 'board'">
       <div class="todos-view__board">
         <section
-          v-for="lane in boardLanes.filter((l) => l.todos.length || !lane.key.startsWith('__'))"
+          v-for="lane in boardLanes"
           :key="lane.key"
           class="glass-panel todos-view__col"
           :style="{ '--lane-color': lane.color }"
