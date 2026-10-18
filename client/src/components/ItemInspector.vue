@@ -173,6 +173,7 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
       </div>
 
       <textarea
+        v-auto-grow
         v-model="edit.summary"
         class="inspector__summary-input"
         rows="3"
@@ -344,6 +345,7 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
 
 .inspector__summary-input {
   width: 100%;
+  min-height: 78px; /* 3 行起步，v-auto-grow 随内容增高 */
   font: var(--font-secondary);
   color: var(--text-primary);
   line-height: 1.8;
@@ -353,6 +355,8 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
   padding: var(--space-6);
   outline: none;
   resize: vertical;
+  overflow: hidden;
+  overflow-wrap: break-word;
   transition: border-color var(--transition-fast);
 }
 .inspector__summary-input:hover { border-color: var(--glass-border); }
