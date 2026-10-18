@@ -3,10 +3,10 @@
 // 取代信息库右侧的统计侧栏（分类分布/标签云归数据看板管，MECE）。
 // 职责：深读选中卡片 —— 正文、Agent 截图/生图资产、名下 TODO 直接打勾、关联跳转、
 // v2.2 预处理任务进度（技能步骤 ✓/○/✗ + 重跑）。
-import { computed, ref, watch } from 'vue';
+import { computed, ref, reactive, watch, onBeforeUnmount } from 'vue';
 import { useTodosStore } from '../stores/todos';
 import { PLATFORM_MAP, PRIORITY_MAP, FORM_MAP, itemForm, timeAgo, fmtDate } from '../constants';
-import { fetchJobs, reprocessItem } from '../api';
+import { fetchJobs, reprocessItem, patchItem } from '../api';
 import { toastError, toastSuccess } from '../stores/toast';
 
 const props = defineProps({
@@ -19,18 +19,78 @@ const form = computed(() => itemForm(props.item));
 const jobs = ref([]);
 const reprunning = ref(false);
 
+// ===== v2.2 就地实时编辑（思考笔记核心交互）：本地副本 + 防抖自动保存 =====
+// 输入即落库（PATCH → SSE 广播 → 左侧卡片同步刷新），不弹 Modal 不点保存。
+const edit = reactive({ title: '', summary: '', points: [] });
+const saveState = ref('idle'); // idle | saving | saved
+let saveTimer = null;
+let pendingPatch = {};
+let pendingFor = null; // 待冲刷输入所属的卡片 id（切卡时按原 id 落盘，避免串卡）
+
 watch(
   () => props.item?.id,
-  async (id) => {
+  (id) => {
     jobs.value = [];
-    if (!id) return;
-    try {
-      const res = await fetchJobs({ item_id: id });
-      jobs.value = res.jobs || [];
-    } catch { /* 无 job 或网络抖动不阻塞阅读 */ }
+    if (id) {
+      fetchJobs({ item_id: id })
+        .then((res) => { jobs.value = res.jobs || []; })
+        .catch(() => {});
+    }
+    // 切卡/关闭前若有未落盘的输入，按原卡片冲刷
+    flushSave();
+    edit.title = props.item?.title || '';
+    edit.summary = props.item?.summary || '';
+    edit.points = [...(props.item?.key_points || [])];
   },
   { immediate: true }
 );
+
+onBeforeUnmount(flushSave);
+
+function queueSave(patch) {
+  pendingFor ||= props.item?.id;
+  Object.assign(pendingPatch, patch);
+  saveState.value = 'saving';
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSave, 700);
+}
+
+async function flushSave() {
+  clearTimeout(saveTimer);
+  if (!Object.keys(pendingPatch).length || !pendingFor) return;
+  const id = pendingFor;
+  const body = pendingPatch;
+  pendingPatch = {};
+  pendingFor = null;
+  try {
+    await patchItem(id, body);
+    saveState.value = 'saved';
+    setTimeout(() => { if (saveState.value === 'saved') saveState.value = 'idle'; }, 1500);
+  } catch (e) {
+    saveState.value = 'idle';
+    toastError(`自动保存失败：${e.message}`);
+  }
+}
+
+const saveHint = computed(() =>
+  saveState.value === 'saving' ? '保存中…' : saveState.value === 'saved' ? '✓ 已自动保存' : ''
+);
+
+// 要点编辑：整组防抖提交
+function savePoints() {
+  queueSave({ key_points: edit.points.filter((p) => p.trim()) });
+}
+function updatePoint(i, v) {
+  edit.points[i] = v;
+  savePoints();
+}
+function removePoint(i) {
+  edit.points.splice(i, 1);
+  savePoints();
+}
+function addPoint() {
+  edit.points.push('');
+}
 
 const activeJob = computed(() => jobs.value.find((j) => ['pending', 'running', 'waiting_local'].includes(j.status)));
 const STEP_ICON = { done: '✓', running: '◐', failed: '✗', pending: '○' };
@@ -79,7 +139,13 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
     </header>
 
     <div class="inspector__body">
-      <h2 class="inspector__title">{{ item.title }}</h2>
+      <!-- v2.2 就地实时编辑：标题 / 摘要 / 要点，输入即自动保存 -->
+      <input
+        v-model="edit.title"
+        class="inspector__title-input"
+        placeholder="标题"
+        @input="queueSave({ title: edit.title })"
+      />
       <div class="inspector__meta">
         <span class="timestamp">🕐 {{ timeAgo(item.created_at) }}</span>
         <span v-if="item.source_platform && item.source_platform !== 'manual'" class="timestamp">
@@ -89,9 +155,16 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
           查看原文 ↗
         </a>
         <span class="timestamp">Agent 置信度 {{ Math.round((item.agent_confidence || 0) * 100) }}%</span>
+        <span v-if="saveHint" class="inspector__savehint" :class="`is-${saveState}`">{{ saveHint }}</span>
       </div>
 
-      <p class="inspector__summary">{{ item.summary }}</p>
+      <textarea
+        v-model="edit.summary"
+        class="inspector__summary-input"
+        rows="3"
+        placeholder="一句话摘要…"
+        @input="queueSave({ summary: edit.summary })"
+      />
 
       <!-- v2.2 预处理任务进度：技能步骤逐项点亮 + 失败重跑 -->
       <section v-if="jobs.length" class="inspector__section">
@@ -145,11 +218,21 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
         </div>
       </section>
 
-      <section v-if="item.key_points?.length" class="inspector__section">
-        <h3>💡 关键要点</h3>
-        <ul class="inspector__points">
-          <li v-for="(k, i) in item.key_points" :key="i">{{ k }}</li>
-        </ul>
+      <section class="inspector__section">
+        <h3>💡 关键要点 <span class="inspector__edit-hint">点击直接编辑</span></h3>
+        <div class="inspector__points">
+          <div v-for="(p, i) in edit.points" :key="i" class="inspector__point-row">
+            <input
+              :value="p"
+              class="inspector__point-input"
+              placeholder="写一条要点…"
+              @input="updatePoint(i, $event.target.value)"
+              @keydown.enter="$event.target.blur()"
+            />
+            <button class="inspector__point-del" title="删除这条要点" @click="removePoint(i)">✕</button>
+          </div>
+          <button class="inspector__point-add" @click="addPoint">＋ 添加要点</button>
+        </div>
       </section>
 
       <section v-if="item.todos?.length" class="inspector__section">
@@ -228,14 +311,81 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
 .inspector__link { font: var(--font-caption); color: var(--accent-cyan); text-decoration: none; }
 .inspector__link:hover { text-decoration: underline; }
 
-.inspector__summary {
+/* ===== v2.2 就地编辑输入框：无边框融入排版，聚焦时下划线点亮 ===== */
+.inspector__title-input {
+  width: 100%;
+  font: var(--font-h2);
+  color: var(--text-primary);
+  background: transparent;
+  border: none;
+  border-bottom: 1.5px dashed transparent;
+  padding: 2px 0 6px;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+.inspector__title-input:hover { border-bottom-color: var(--glass-border-hover); }
+.inspector__title-input:focus { border-bottom-color: var(--accent-blue); border-bottom-style: solid; }
+
+.inspector__summary-input {
+  width: 100%;
   font: var(--font-secondary);
   color: var(--text-primary);
   line-height: 1.8;
-  padding: var(--space-6);
   background: var(--glass-bg-faint);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
+  padding: var(--space-6);
+  outline: none;
+  resize: vertical;
+  transition: border-color var(--transition-fast);
 }
+.inspector__summary-input:hover { border-color: var(--glass-border); }
+.inspector__summary-input:focus { border-color: var(--accent-blue); }
+
+.inspector__savehint { font: var(--font-micro); }
+.inspector__savehint.is-saving { color: var(--accent-orange); }
+.inspector__savehint.is-saved { color: var(--accent-green); }
+.inspector__edit-hint { font: var(--font-micro); color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+
+/* 要点行编辑 */
+.inspector__points { display: flex; flex-direction: column; gap: var(--space-3); }
+.inspector__point-row { display: flex; align-items: center; gap: var(--space-3); }
+.inspector__point-input {
+  flex: 1;
+  min-width: 0;
+  font: var(--font-secondary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  background: var(--glass-bg-faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-5);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+.inspector__point-input:hover { border-color: var(--glass-border); }
+.inspector__point-input:focus { border-color: var(--accent-blue); }
+.inspector__point-input::placeholder { color: var(--text-muted); }
+.inspector__point-del {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: var(--radius-xs);
+  opacity: 0;
+  transition: all var(--transition-fast);
+}
+.inspector__point-row:hover .inspector__point-del { opacity: 1; }
+.inspector__point-del:hover { color: var(--accent-red); background: var(--glass-hover); }
+.inspector__point-add {
+  align-self: flex-start;
+  font: var(--font-micro);
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-5);
+  border: 1px dashed var(--glass-border);
+  border-radius: var(--radius-sm);
+  transition: all var(--transition-fast);
+}
+.inspector__point-add:hover { color: var(--accent-blue); border-color: var(--accent-blue); }
 
 .inspector__section h3 {
   font: var(--font-caption);
