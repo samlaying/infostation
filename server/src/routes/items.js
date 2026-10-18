@@ -121,6 +121,12 @@ itemsRouter.patch('/items/:id', (req, res) => {
   const updates = {};
   if (typeof b.title === 'string' && b.title.trim()) updates.title = b.title.trim().slice(0, 60);
   if (typeof b.summary === 'string') updates.summary = b.summary.trim().slice(0, 300);
+  // v2.2：要点数组支持就地编辑（Inspector 实时保存）
+  if (Array.isArray(b.key_points)) {
+    updates.key_points = JSON.stringify(
+      b.key_points.map((k) => String(k).slice(0, 200)).filter(Boolean).slice(0, 12)
+    );
+  }
   if (isValidCategory(b.primary_category)) updates.primary_category = b.primary_category;
   if (isValidContentType(b.content_type)) { updates.content_type = b.content_type; updates.secondary_category = b.content_type; }
   if (isValidPriority(b.priority)) updates.priority = b.priority;
