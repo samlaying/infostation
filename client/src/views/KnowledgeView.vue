@@ -16,6 +16,12 @@ const topicsStore = useTopicsStore();
 
 const detailItem = ref(null);   // Inspector 内容（选中卡片）
 const editingItem = ref(null);  // Modal 编辑
+// 宽屏编辑模式：Inspector 扩到近半屏（localStorage 记忆）
+const wideInspector = ref(localStorage.getItem('infostation_inspector_wide') === '1');
+function toggleWide() {
+  wideInspector.value = !wideInspector.value;
+  localStorage.setItem('infostation_inspector_wide', wideInspector.value ? '1' : '0');
+}
 
 // 三态透镜：全部 / 仅看代试 / 仅看内容（化解两条线的“半隔离”观感）
 const LENS = [
@@ -71,7 +77,7 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
 </script>
 
 <template>
-  <div class="knowledge" :class="{ 'knowledge--inspecting': !!detailItem }">
+  <div class="knowledge" :class="{ 'knowledge--wide-inspector': wideInspector && detailItem }">
     <!-- 左：主题抽屉（长期主题，唯一归属轴） -->
     <TopicDock :active="itemsStore.filters.topic_id ? Number(itemsStore.filters.topic_id) : null" @select="onTopicSelect" />
 
@@ -118,11 +124,13 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
       </div>
     </div>
 
-    <!-- 右：选中卡片的详情 Inspector（深读 + 资产预览 + 打勾 TODO） -->
+    <!-- 右：选中卡片的详情 Inspector（深读 + 资产预览 + 打勾 TODO + 就地编辑） -->
     <ItemInspector
       v-if="detailItem"
       class="knowledge__inspector"
       :item="detailItem"
+      :wide="wideInspector"
+      @toggle-wide="toggleWide"
       @close="detailItem = null"
       @edit="startEdit"
       @open-related="selectById"
@@ -149,9 +157,14 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
 <style scoped>
 .knowledge {
   display: grid;
-  grid-template-columns: 216px minmax(0, 1fr) 340px;
+  grid-template-columns: 216px minmax(0, 1fr) 380px;
   gap: var(--space-8);
   align-items: start;
+}
+
+/* 宽屏编辑模式：Inspector 扩到近半屏（长要点/全文编辑不再挤窄条） */
+.knowledge--wide-inspector {
+  grid-template-columns: 216px minmax(280px, 1fr) minmax(440px, 42vw);
 }
 
 .knowledge__main { min-width: 0; }
@@ -212,7 +225,8 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
 .knowledge__placeholder-icon { font-size: 30px; display: block; margin-bottom: var(--space-5); opacity: 0.7; }
 
 @media (max-width: 1280px) {
-  .knowledge { grid-template-columns: minmax(0, 1fr) 340px; }
+  .knowledge { grid-template-columns: minmax(0, 1fr) 360px; }
+  .knowledge--wide-inspector { grid-template-columns: minmax(0, 1fr) minmax(400px, 48vw); }
   .knowledge > :first-child { display: none; } /* 窄屏收起主题抽屉 */
 }
 @media (max-width: 1024px) {

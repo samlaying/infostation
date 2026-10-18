@@ -11,8 +11,9 @@ import { toastError, toastSuccess } from '../stores/toast';
 
 const props = defineProps({
   item: { type: Object, required: true }, // 完整 detail（含 todos / assets / related_items）
+  wide: { type: Boolean, default: false }, // 宽屏编辑模式
 });
-const emit = defineEmits(['close', 'edit', 'open-related']);
+const emit = defineEmits(['close', 'edit', 'open-related', 'toggle-wide']);
 
 const todosStore = useTodosStore();
 const form = computed(() => itemForm(props.item));
@@ -143,6 +144,9 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
         <span v-if="item.topic_name" class="inspector__topic">📁 {{ item.topic_name }}</span>
       </div>
       <div class="inspector__header-actions">
+        <button class="btn btn--glass btn--sm" :title="wide ? '收窄侧栏' : '放宽编辑区（近半屏）'" @click="emit('toggle-wide')">
+          {{ wide ? '⤡ 收窄' : '⤢ 放宽' }}
+        </button>
         <button class="btn btn--glass btn--sm" @click="emit('edit')">✎ 编辑</button>
         <button class="btn btn--glass btn--sm" @click="emit('close')">收起 ✕</button>
       </div>
