@@ -95,6 +95,10 @@ export const patchPost = (id, body) => api.patch(`/posts/${id}`, body);
 export const deletePost = (id) => api.delete(`/posts/${id}`);
 
 export const fetchStats = () => api.get('/stats');
+
+// ===== v2.2：Agent 预处理任务 =====
+export const fetchJobs = (params) => api.get('/agent-jobs', params);
+export const reprocessItem = (itemId) => api.post(`/agent-jobs/reprocess/${itemId}`, {});
 export const fetchWeeklyReport = (refresh) => api.get('/weekly-report', refresh ? { refresh: 1 } : undefined);
 export const fetchWeeklyReports = () => api.get('/weekly-reports');
 export const fetchSettings = () => api.get('/settings');

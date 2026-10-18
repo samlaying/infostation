@@ -107,6 +107,23 @@ CREATE TABLE IF NOT EXISTS posts (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ===== v2.2：Agent 预处理任务（Pre-execution Engine）=====
+-- 卡片入库后由 orchestrator 生成技能执行计划；重型技能（浏览器截图/gh clone）
+-- 没有部署在生产 VPS 上，标记 runtime='local'，由用户 Mac 上的 CLI worker
+-- 通过 REST 认领执行、回传产物（截图上传为静态文件并登记 assets）。
+CREATE TABLE IF NOT EXISTS agent_jobs (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  item_id      TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  status       TEXT NOT NULL DEFAULT 'pending'
+               CHECK(status IN ('pending', 'running', 'waiting_local', 'completed', 'failed')),
+  current_step TEXT,             -- 展示用："正在调用 ego 浏览器截图…"
+  skills_plan  TEXT NOT NULL DEFAULT '[]',  -- JSON: [{skill, params, runtime: server|local, reason}]
+  logs         TEXT NOT NULL DEFAULT '[]',  -- JSON: [{skill, status, result, error, started_at, finished_at}]
+  error_msg    TEXT,
+  created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS weekly_reports (
   id          TEXT PRIMARY KEY,
   week_start  TEXT NOT NULL UNIQUE,
@@ -163,6 +180,8 @@ CREATE INDEX IF NOT EXISTS idx_todos_topic      ON todos(topic_id);
 CREATE INDEX IF NOT EXISTS idx_assets_item      ON assets(item_id);
 CREATE INDEX IF NOT EXISTS idx_posts_source     ON posts(source_item_id);
 CREATE INDEX IF NOT EXISTS idx_posts_status     ON posts(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_item        ON agent_jobs(item_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_status      ON agent_jobs(status);
 `);
 
 // ===== v2.0：触发器 —— 母卡 line/topic_id 变更时自动同步名下 todos（消灭漂移）=====
@@ -226,6 +245,12 @@ export function rowToAsset(row) {
 export function rowToPost(row) {
   if (!row) return null;
   return { ...row, asset_ids: JSON.parse(row.asset_ids || '[]') };
+}
+
+// ===== v2.2：预处理任务行转换 =====
+export function rowToJob(row) {
+  if (!row) return null;
+  return { ...row, skills_plan: JSON.parse(row.skills_plan || '[]'), logs: JSON.parse(row.logs || '[]') };
 }
 
 export function getSetting(key, fallback) {

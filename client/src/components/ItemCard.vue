@@ -20,6 +20,16 @@ const todoCount = computed(() => props.item.todo_count ?? 0);
 const todoDone = computed(() => props.item.todo_done_count ?? 0);
 const allDone = computed(() => todoCount.value > 0 && !props.item.next_todo_id);
 
+// v2.2 预处理状态：活跃 job 显示呼吸灯；产物按已落库的字段推导徽章
+const jobActive = computed(() => ['pending', 'running', 'waiting_local'].includes(props.item.job_status));
+const badges = computed(() => {
+  const b = [];
+  if (props.item.asset_count > 0) b.push(`🖼 ${props.item.asset_count} 图`);
+  if ((props.item.agent_note || '').includes('已 Clone')) b.push('💻 已 Clone');
+  if ((props.item.agent_note || '').includes('前置调研')) b.push('🔍 调研简报');
+  return b;
+});
+
 async function completeNext() {
   try {
     await patchTodo(props.item.next_todo_id, { status: 'done' });
@@ -85,10 +95,27 @@ async function toMediaIdea() {
       <span v-for="t in item.tags.slice(0, 4)" :key="t" class="tag-chip" @click.stop>#{{ t }}</span>
     </div>
 
+    <!-- v2.2 预制件徽章：Agent 已备好的弹药 -->
+    <div v-if="badges.length" class="item-card__badges2">
+      <span v-for="b in badges" :key="b" class="item-card__badge2">{{ b }}</span>
+    </div>
+
     <!-- 状态机行动条：任何时刻只有一个高亮的下一步 -->
     <footer class="item-card__action">
+      <!-- 预处理进行中：紫色呼吸灯（唯一暂时高亮的行） -->
+      <template v-if="jobActive">
+        <span class="item-card__preexec">
+          <span class="item-card__pulse" />🔄 {{
+            item.job_status === 'waiting_local' ? '等待本地 Agent 认领' : (item.job_step || 'Agent 预处理中…')
+          }}
+        </span>
+        <span class="item-card__meta-right">
+          <span class="timestamp">{{ timeAgo(item.created_at) }}</span>
+          <button class="icon-btn" title="删除" @click.stop="emit('delete', item)">✕</button>
+        </span>
+      </template>
       <!-- 状态 1：还有未完 TODO → 下一步 + 直接打勾 -->
-      <template v-if="item.next_todo_id">
+      <template v-else-if="item.next_todo_id">
         <span class="item-card__next">👉 下一步：{{ item.next_todo_title }}</span>
         <span class="item-card__progress">{{ todoDone }}/{{ todoCount }}</span>
         <button class="item-card__cta item-card__cta--check" title="直接完成这条 TODO" @click.stop="completeNext">☑️</button>
@@ -233,6 +260,42 @@ async function toMediaIdea() {
 }
 
 .item-card__tags { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* v2.2 预制件徽章 + 预处理呼吸灯 */
+.item-card__badges2 { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.item-card__badge2 {
+  font: var(--font-micro);
+  color: var(--accent-purple);
+  background: rgba(147, 51, 234, 0.07);
+  border: 1px solid rgba(147, 51, 234, 0.25);
+  padding: 2px 9px;
+  border-radius: var(--radius-full);
+}
+.item-card__preexec {
+  flex: 1;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font: var(--font-caption);
+  color: var(--accent-purple);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item-card__pulse {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  border-radius: 50%;
+  background: var(--accent-purple);
+  box-shadow: 0 0 8px rgba(147, 51, 234, 0.6);
+  animation: item-preexec-pulse 1.4s ease-in-out infinite;
+}
+@keyframes item-preexec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 
 /* ===== 状态机行动条 ===== */
 .item-card__action {
