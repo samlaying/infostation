@@ -5,10 +5,12 @@ import { nanoid } from 'nanoid';
 import { db } from '../db.js';
 
 function mondayOf(date) {
+  // 全程 UTC 口径：fmt() 用 toISOString（UTC），这里也必须用 UTC 方法算周一，
+  // 否则非 UTC 时区（如 UTC+8）的周一零点会被序列化成前一天的日期，整周窗口偏移一天
   const d = new Date(date);
-  const day = (d.getDay() + 6) % 7; // 周一=0
-  d.setDate(d.getDate() - day);
-  d.setHours(0, 0, 0, 0);
+  const day = (d.getUTCDay() + 6) % 7; // 周一=0
+  d.setUTCDate(d.getUTCDate() - day);
+  d.setUTCHours(0, 0, 0, 0);
   return d;
 }
 
@@ -126,7 +128,7 @@ export function getOrCreateWeeklyReport(force = false) {
   const start = fmt(mondayOf(new Date()));
   if (!force) {
     const row = db.prepare('SELECT * FROM weekly_reports WHERE week_start = ?').get(start);
-    if (row) return JSON.parse(row.snapshot);
+    if (row) return withStale(JSON.parse(row.snapshot));
   }
   const report = buildWeeklyReport();
   db.prepare(
@@ -136,9 +138,23 @@ export function getOrCreateWeeklyReport(force = false) {
   return report;
 }
 
+// v2.1：给「本周」的旧快照附实时差值——前端据此显示「有 N 条新数据未同步」，
+// 消解「数据看板 5 / 周报快照 1」的口径打架。历史周报不适用，原样返回。
+function withStale(report) {
+  if (!report || report.week_start !== fmt(mondayOf(new Date()))) return report;
+  const since = report.created_at;
+  const q = (sql) => db.prepare(sql).get(since, report.week_start, report.week_end).c;
+  const stale = {
+    items: q(`SELECT COUNT(*) c FROM items WHERE created_at > ? AND substr(created_at,1,10) BETWEEN ? AND ?`),
+    todos: q(`SELECT COUNT(*) c FROM todos WHERE created_at > ? AND substr(created_at,1,10) BETWEEN ? AND ?`),
+    done: q(`SELECT COUNT(*) c FROM todos WHERE status='done' AND completed_at > ? AND substr(completed_at,1,10) BETWEEN ? AND ?`),
+  };
+  return { ...report, stale };
+}
+
 export function listWeeklyReports() {
   return db
     .prepare('SELECT * FROM weekly_reports ORDER BY week_start DESC LIMIT 26')
     .all()
-    .map((r) => JSON.parse(r.snapshot));
+    .map((r) => withStale(JSON.parse(r.snapshot)));
 }

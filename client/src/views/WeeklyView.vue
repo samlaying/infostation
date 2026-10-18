@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { fetchWeeklyReport, fetchWeeklyReports } from '../api';
 import { CATEGORY_MAP, PRIORITY_MAP } from '../constants';
 import EmptyState from '../components/EmptyState.vue';
@@ -9,6 +9,21 @@ import { useLiveReload } from '../api/live';
 const report = ref(null);
 const history = ref([]);
 const loading = ref(false);
+
+// 快照之后又有新数据 → 橙点提示「重新生成」（历史周报无 stale，恒为 0）
+const staleTotal = computed(() => {
+  const s = report.value?.stale;
+  return s ? s.items + s.todos + s.done : 0;
+});
+const staleText = computed(() => {
+  const s = report.value?.stale;
+  if (!s) return '';
+  const parts = [];
+  if (s.items) parts.push(`${s.items} 卡片`);
+  if (s.todos) parts.push(`${s.todos} TODO`);
+  if (s.done) parts.push(`${s.done} 完成`);
+  return parts.join(' / ') + ' ';
+});
 
 async function load(refresh = false) {
   loading.value = true;
@@ -66,10 +81,20 @@ function rangeText(r) {
           <h1 class="weekly__title">📋 InfoStation 周报</h1>
           <div class="timestamp">{{ rangeText(report) }} · 生成于 {{ report.created_at.slice(0, 10) }}</div>
         </div>
-        <button class="btn btn--glass btn--sm" :disabled="loading" @click="load(true)">
-          <span v-if="loading" class="spinner" />
-          🔄 重新生成
-        </button>
+        <div class="weekly__header-actions">
+          <!-- v2.1：快照 vs 实时差值提示，消解「看板 5 条 / 周报 1 条」的口径打架 -->
+          <span
+            v-if="staleTotal"
+            class="weekly__stale"
+            title="快照生成后又新增了数据，重新生成才会纳入周报"
+          >
+            <span class="weekly__stale-dot" />{{ staleText }}未同步
+          </span>
+          <button class="btn btn--glass btn--sm" :disabled="loading" @click="load(true)">
+            <span v-if="loading" class="spinner" />
+            🔄 重新生成
+          </button>
+        </div>
       </header>
 
       <section class="weekly__section">
@@ -167,6 +192,29 @@ function rangeText(r) {
   flex-wrap: wrap;
 }
 .weekly__title { font: var(--font-h1); }
+
+.weekly__header-actions { display: flex; align-items: center; gap: var(--space-5); flex-wrap: wrap; }
+.weekly__stale {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font: var(--font-caption);
+  color: var(--accent-orange);
+  background: rgba(251, 146, 60, 0.08);
+  border: 1px solid rgba(251, 146, 60, 0.35);
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+}
+.weekly__stale-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent-orange);
+  box-shadow: 0 0 8px rgba(251, 146, 60, 0.6);
+  animation: weekly-stale-pulse 1.6s ease-in-out infinite;
+}
+@keyframes weekly-stale-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
 
 .weekly__section { margin-bottom: var(--space-9); }
 .weekly__section h2 {

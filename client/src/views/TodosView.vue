@@ -2,7 +2,7 @@
 import { ref, computed, watch, onMounted } from 'vue';
 import { useTodosStore } from '../stores/todos';
 import { useItemsStore } from '../stores/items';
-import { GOAL_COLUMNS, CATEGORY_MAP, PRIORITY_MAP } from '../constants';
+import { useTopicsStore } from '../stores/topics';
 import TodoItem from '../components/TodoItem.vue';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
@@ -12,16 +12,18 @@ import { useLiveReload } from '../api/live';
 
 const todosStore = useTodosStore();
 const itemsStore = useItemsStore();
+const topicsStore = useTopicsStore();
 
 const view = ref('today'); // today | board | all | done
 const newTodoTitle = ref('');
-const newTodoCategory = ref('growth');
+const newTodoTopic = ref('');   // '' = 不挂主题
+const newTodoDeadline = ref(''); // YYYY-MM-DD 可空
 const creating = ref(false);
 const detailItem = ref(null);
 
 const VIEW_TABS = [
   { key: 'today', label: '今日待办', icon: '📅' },
-  { key: 'board', label: '目标看板', icon: '🎯' },
+  { key: 'board', label: '主题看板', icon: '🎯' },
   { key: 'all', label: '全部', icon: '📋' },
   { key: 'done', label: '完成记录', icon: '🏆' },
 ];
@@ -35,9 +37,6 @@ const tabsWithCount = computed(() =>
   )
 );
 
-// 泳道色调跟随领域色
-const colColor = (key) => CATEGORY_MAP[key]?.color || 'var(--accent-blue)';
-
 async function load() {
   // 面板只显示 TODO 线（行动项）；自媒体线的内容工序在「内容生产」视图
   const base = { line: 'trial' };
@@ -45,24 +44,32 @@ async function load() {
     view.value === 'today' ? { ...base, view: 'today' }
     : view.value === 'done' ? { ...base, view: 'done' }
     : { ...base, view: 'pending' };
-  await todosStore.load(params);
+  await Promise.all([todosStore.load(params), topicsStore.load()]);
 }
 
 onMounted(load);
 watch(view, load);
 
 // SSE：CLI/其他端落库或改 TODO 后，本视图自动重拉
-useLiveReload(load, ['todos']);
+useLiveReload(load, ['todos', 'topics']);
 
-// 目标看板按三列分组
-const goalGroups = computed(() =>
-  GOAL_COLUMNS.map((col) => ({
-    ...col,
-    todos: todosStore.list.filter((t) => t.category === col.key),
-  }))
-);
-
-const otherTodos = computed(() => todosStore.list.filter((t) => !GOAL_COLUMNS.some((c) => c.key === t.category)));
+// 主题看板：按长期主题分泳道（v2.1 取代旧 category 三列），未挂主题的进「未归档」
+const boardLanes = computed(() => [
+  ...topicsStore.active.map((t) => ({
+    key: `t-${t.id}`,
+    label: t.name,
+    icon: t.icon,
+    color: t.color,
+    todos: todosStore.list.filter((x) => x.topic_id === t.id),
+  })),
+  {
+    key: '__none__',
+    label: '未挂主题',
+    icon: '🗂',
+    color: 'var(--text-secondary)',
+    todos: todosStore.list.filter((x) => !x.topic_id),
+  },
+]);
 
 const doneStats = computed(() => {
   const done = todosStore.list;
@@ -75,8 +82,14 @@ async function createTodo() {
   if (!title) return;
   creating.value = true;
   try {
-    await todosStore.create({ title, category: newTodoCategory.value, priority: 'medium', line: 'trial' });
+    await todosStore.create({
+      title,
+      line: 'trial',
+      topic_id: newTodoTopic.value || undefined,
+      actual_deadline: newTodoDeadline.value || undefined,
+    });
     newTodoTitle.value = '';
+    newTodoDeadline.value = '';
     toastSuccess('TODO 已创建');
   } catch (e) {
     toastError(e.message);
@@ -97,12 +110,19 @@ async function openSource(todo) {
       <input
         v-model="newTodoTitle"
         class="glass-input todos-view__create-input"
-        placeholder="手动添加 TODO（如：完成个人定位语初稿）…"
+        placeholder="手动添加行动项（如：跑通 ESP32 第一个 demo）…"
         @keydown.enter="createTodo"
       />
-      <select v-model="newTodoCategory" class="glass-select glass-input todos-view__create-select">
-        <option v-for="(c, key) in CATEGORY_MAP" :key="key" :value="key">{{ c.icon }} {{ c.label }}</option>
+      <select v-model="newTodoTopic" class="glass-select glass-input todos-view__create-select">
+        <option value="">🗂 不挂主题</option>
+        <option v-for="t in topicsStore.active" :key="t.id" :value="String(t.id)">{{ t.icon }} {{ t.name }}</option>
       </select>
+      <input
+        v-model="newTodoDeadline"
+        type="date"
+        class="glass-input todos-view__create-date"
+        title="截止日期（可空）"
+      />
       <button class="btn btn--primary" :disabled="!newTodoTitle.trim() || creating" @click="createTodo">
         {{ creating ? '创建中…' : '＋ 添加' }}
       </button>
@@ -128,30 +148,24 @@ async function openSource(todo) {
       />
     </template>
 
-    <!-- 目标看板 -->
+    <!-- 主题看板：按长期主题分泳道 -->
     <template v-else-if="view === 'board'">
       <div class="todos-view__board">
         <section
-          v-for="col in goalGroups"
-          :key="col.key"
+          v-for="lane in boardLanes.filter((l) => l.todos.length || !lane.key.startsWith('__'))"
+          :key="lane.key"
           class="glass-panel todos-view__col"
-          :style="{ '--lane-color': colColor(col.key) }"
+          :style="{ '--lane-color': lane.color }"
         >
           <header class="todos-view__col-header">
-            <span>{{ col.icon }} {{ col.label }}</span>
-            <span class="todos-view__count">{{ col.todos.length }}</span>
+            <span>{{ lane.icon }} {{ lane.label }}</span>
+            <span class="todos-view__count">{{ lane.todos.length }}</span>
           </header>
           <div class="todos-view__col-body">
-            <TodoItem v-for="t in col.todos" :key="t.id" :todo="t" compact @open-source="openSource" />
-            <div v-if="!col.todos.length" class="timestamp todos-view__col-empty">暂无待办</div>
+            <TodoItem v-for="t in lane.todos" :key="t.id" :todo="t" compact @open-source="openSource" />
+            <div v-if="!lane.todos.length" class="timestamp todos-view__col-empty">暂无待办</div>
           </div>
         </section>
-      </div>
-      <div v-if="otherTodos.length" class="todos-view__other">
-        <h3 class="todos-view__other-title">其他领域（认知成长 / 工具 / 存档）</h3>
-        <div class="todos-view__list">
-          <TodoItem v-for="t in otherTodos" :key="t.id" :todo="t" compact @open-source="openSource" />
-        </div>
       </div>
     </template>
 
@@ -187,6 +201,12 @@ async function openSource(todo) {
 }
 .todos-view__create-input { flex: 1; }
 .todos-view__create-select { width: auto; flex-shrink: 0; }
+.todos-view__create-date {
+  width: auto;
+  flex-shrink: 0;
+  font: var(--font-secondary);
+  color: var(--text-secondary);
+}
 
 .todos-view__tabs { align-self: flex-start; }
 .todos-view__count {
@@ -203,10 +223,10 @@ async function openSource(todo) {
   gap: var(--space-4);
 }
 
-/* 目标看板：磨砂玻璃泳道（淡色底 30% + 领域色顶线） */
+/* 主题看板：磨砂玻璃泳道（淡色底 + 主题色顶线），列数随主题自适应 */
 .todos-view__board {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--space-7);
 }
 

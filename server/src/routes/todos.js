@@ -67,10 +67,17 @@ todosRouter.get('/todos', (req, res) => {
 
 // ---- 手动新建 ----
 todosRouter.post('/todos', (req, res) => {
-  const { title, description = '', category = 'growth', priority = 'medium', actual_deadline, source_item_id, line } = req.body || {};
+  const { title, description = '', category = 'growth', priority = 'medium', actual_deadline, source_item_id, line, topic_id } = req.body || {};
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'TODO 标题不能为空' });
   if (source_item_id && !db.prepare('SELECT id FROM items WHERE id = ?').get(source_item_id)) {
     return res.status(400).json({ error: '来源信息不存在' });
+  }
+  // v2.1：手动 TODO 可直挂主题（TODO 面板快速添加绑主题）
+  let topicId = null;
+  if (Number.isFinite(Number(topic_id))) {
+    const t = db.prepare('SELECT id FROM topics WHERE id = ?').get(Number(topic_id));
+    if (!t) return res.status(400).json({ error: '主题不存在' });
+    topicId = t.id;
   }
   const now = new Date().toISOString();
   const id = nanoid();
@@ -81,8 +88,8 @@ todosRouter.post('/todos', (req, res) => {
     if (src && isValidLine(src.line)) targetLine = src.line;
   }
   db.prepare(`
-    INSERT INTO todos (id, title, description, source_item_id, category, priority, status, actual_deadline, tags, line, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '[]', ?, ?)
+    INSERT INTO todos (id, title, description, source_item_id, category, priority, status, actual_deadline, tags, line, topic_id, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '[]', ?, ?, ?)
   `).run(
     id,
     String(title).trim().slice(0, 40),
@@ -92,6 +99,7 @@ todosRouter.post('/todos', (req, res) => {
     isValidPriority(priority) ? priority : 'medium',
     actual_deadline || null,
     targetLine || 'trial',
+    topicId,
     now
   );
   broadcast('todos', 'create', id);

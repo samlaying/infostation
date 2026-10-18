@@ -15,6 +15,38 @@ export const MEDIA_ROLE_MAP = {
   已发布: { icon: '🚀', label: '已发布' },
 };
 
+// ===== v2.1 内容形态（MECE 四形态：决定用哪个 UI 组件渲染，取代 content_type 展示位）=====
+export const FORM_MAP = {
+  link: { label: '网页/项目', icon: '🔗' },
+  note: { label: '思考笔记', icon: '📝' },
+  idea: { label: '选题', icon: '💡' },
+  bundle: { label: '发布包', icon: '📦' },
+};
+
+/** 由卡片字段推导形态：idea/bundle 看角色，material 按「有无源链接」拆 link/note */
+export function itemForm(item) {
+  if (item.item_type === 'idea') return 'idea';
+  if (item.item_type === 'bundle') return 'bundle';
+  return item.source_url ? 'link' : 'note';
+}
+
+// 帖子平台（posts 表 platform 枚举，与 server constants 一致）
+export const POST_PLATFORM_MAP = {
+  xiaohongshu: { label: '小红书', icon: '📕' },
+  wechat: { label: '公众号', icon: '💬' },
+  x: { label: 'X / 推特', icon: '𝕏' },
+  bilibili: { label: 'B站', icon: '📺' },
+  zhihu: { label: '知乎', icon: '🧠' },
+};
+
+export const POST_STATUS_MAP = {
+  draft: '草稿',
+  ready: '待发布',
+  publishing: '发布中',
+  published: '已发布',
+  failed: '失败',
+};
+
 export const CATEGORY_MAP = {
   career: { label: '职场提升', icon: '🚀', color: 'var(--accent-blue)' },
   media: { label: '自媒体', icon: '📱', color: 'var(--accent-purple)' },

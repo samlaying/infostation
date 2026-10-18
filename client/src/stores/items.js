@@ -11,8 +11,7 @@ export const useItemsStore = defineStore('items', {
     loading: false,
     filters: {
       q: '',
-      category: '',
-      content_type: '',
+      form: '',        // v2.1 四形态：link/note/idea/bundle（取代旧 category/content_type 筛选）
       priority: '',
       platform: '',
       has_todo: '',

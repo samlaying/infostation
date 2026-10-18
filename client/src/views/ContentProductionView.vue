@@ -1,40 +1,49 @@
 <script setup>
-// ===== 内容生产（自媒体线）=====
-// 三区：选题库（tags 含「选题」）/ 内容工序（line=media 的 todos）/ 发布包（tags 含「发布包」）
-// 数据独立拉取（不走 items/todos store，避免与信息库/TODO 面板互相覆盖）
+// ===== 内容生产（自媒体线）· v2.1 状态机流水线 =====
+// MECE：本视图只管 media 线。选题卡是流水线母卡，内嵌工序与资产，四状态各配唯一主 CTA：
+//   A 无工序 → ⚡ 拆解工序（生成模板子工序）
+//   B 工序进行中 → 勾工序 + 🖼 挂载图片资产（截图/生图入 assets 表）
+//   C 工序齐备 → 📦 生成发布包（写 posts 表，带文案+配图引用）
+//   D 发布包待发 → 📋 复制文案 / ✅ 标为已发布（回执链接）
 import { ref, computed, onMounted } from 'vue';
-import { fetchItems, fetchItem, fetchTodos, patchTodo, patchItem, processInput } from '../api';
-import { LINE_MAP, MEDIA_ROLE_MAP, CATEGORY_MAP, PRIORITY_MAP, timeAgo } from '../constants';
+import {
+  fetchItems, fetchItem, fetchTodos, patchTodo, patchItem, createTodo,
+  fetchAssets, createAsset, fetchPosts, createPost, patchPost, processInput,
+} from '../api';
+import { LINE_MAP, POST_PLATFORM_MAP, POST_STATUS_MAP, timeAgo } from '../constants';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
-import { toastError, toastSuccess, toast } from '../stores/toast';
+import { toastError, toastSuccess } from '../stores/toast';
 import { useLiveReload } from '../api/live';
 
-const topics = ref([]);        // 选题卡
-const packages = ref([]);      // 发布包卡
-const workflows = ref([]);     // 内容工序（line=media todos）
+const ideas = ref([]);          // 选题卡（form=idea）
+const posts = ref([]);          // 发布包（posts 表）
+const workflows = ref([]);      // 待推进工序（line=media pending）
+const doneFlows = ref([]);      // 已完成工序（计数用）
+const assetsByItem = ref({});   // item_id → assets[]
 const loading = ref(true);
 const detailItem = ref(null);
-
-// 流水线步进器：选题 → 工序 → 发布包
-const STEPS = [
-  { key: '选题库', label: '选题库', icon: '💡' },
-  { key: '内容工序', label: '内容工序', icon: '🔨' },
-  { key: '发布包', label: '发布包', icon: '📦' },
-];
-const tab = ref('选题库');
+const tab = ref('pipeline');    // pipeline | packages
+const addingFlowFor = ref(null); // 展开内联添加工序的选题 id
+const newFlowTitle = ref('');
 
 async function load() {
   loading.value = true;
   try {
-    const [t, p, w] = await Promise.all([
-      fetchItems({ tag: '选题', line: 'media', page_size: 60 }),
-      fetchItems({ tag: '发布包', line: 'media', page_size: 60 }),
+    const [ideaRes, postRes, wfRes, doneRes, assetRes] = await Promise.all([
+      fetchItems({ form: 'idea', line: 'media', page_size: 60 }),
+      fetchPosts({}),
       fetchTodos({ view: 'pending', line: 'media' }),
+      fetchTodos({ view: 'done', line: 'media' }),
+      fetchAssets({}),
     ]);
-    topics.value = t.items || [];
-    packages.value = p.items || [];
-    workflows.value = w.todos || [];
+    ideas.value = ideaRes.items || [];
+    posts.value = (postRes.posts || []).slice().sort((a, b) => b.id - a.id);
+    workflows.value = wfRes.todos || [];
+    doneFlows.value = doneRes.todos || [];
+    const map = {};
+    for (const a of assetRes.assets || []) (map[a.item_id] ||= []).push(a);
+    assetsByItem.value = map;
   } catch (e) {
     toastError(e.message);
   } finally {
@@ -43,60 +52,125 @@ async function load() {
 }
 onMounted(load);
 
-// SSE：选题/工序/发布包任何一环变更后自动重拉三区
+// SSE：任何一环变更后自动重拉
 useLiveReload(load, ['items', 'todos', 'posts', 'assets']);
 
-const counts = computed(() => ({
-  选题库: topics.value.length,
-  内容工序: workflows.value.length,
-  发布包: packages.value.length,
-}));
+const pendingByItem = computed(() => groupBy(workflows.value));
+const doneByItem = computed(() => groupBy(doneFlows.value));
+function groupBy(list) {
+  const m = {};
+  for (const t of list) (m[t.source_item_id] ||= []).push(t);
+  return m;
+}
+const flowsOf = (it) => [...(pendingByItem.value[it.id] || []), ...(doneByItem.value[it.id] || [])];
+const pendingOf = (it) => pendingByItem.value[it.id] || [];
+const assetsOf = (it) => assetsByItem.value[it.id] || [];
 
-// 内容工序按来源选题分组
-const workflowGroups = computed(() => {
-  const groups = new Map();
-  for (const w of workflows.value) {
-    const key = w.source_item_id || '__none__';
-    if (!groups.has(key)) {
-      groups.set(key, { title: w.source_item_title || '（未关联选题）', todos: [] });
-    }
-    groups.get(key).todos.push(w);
-  }
-  return [...groups.values()];
-});
-
-function roleTags(tags) {
-  return (tags || []).filter((t) => MEDIA_ROLE_MAP[t]);
+// 状态机：A 无工序 / B 工序进行中 / C 工序齐备（可打包）
+function stageOf(it) {
+  const pending = pendingOf(it).length;
+  const total = flowsOf(it).length;
+  if (total === 0) return 'A';
+  if (pending > 0) return 'B';
+  return 'C';
 }
 
-// 卡包式排序：未发布在前，已发布置灰沉底
-const sortedPackages = computed(() => {
-  const isPub = (it) => (it.tags || []).includes('已发布');
-  return [...packages.value].sort((a, b) => Number(isPub(a)) - Number(isPub(b)));
-});
-
-async function toggleWorkflow(todo) {
+// ---- 状态 A：拆解工序（模板三步：实测截图 / 要点整理 / 初稿） ----
+async function bootstrapFlows(it) {
+  const tpl = [
+    '实测并截图（关键步骤 + 结果）',
+    '整理要点对比（给帖子搭骨架）',
+    '写初稿（带 emoji 的平台文案）',
+  ];
   try {
-    const next = todo.status === 'done' ? 'pending' : 'done';
-    const updated = await patchTodo(todo.id, { status: next });
-    const i = workflows.value.findIndex((x) => x.id === todo.id);
-    if (i !== -1) {
-      if (next === 'done') workflows.value.splice(i, 1); // 完成即离开待办列表
-      else workflows.value[i] = updated;
-    }
-    if (next === 'done') toastSuccess('工序已完成 ✓');
+    await Promise.all(tpl.map((title) =>
+      createTodo({ title, line: 'media', source_item_id: it.id, topic_id: it.topic_id || undefined })
+    ));
+    toastSuccess(`已拆解 ${tpl.length} 道工序，逐个推进吧`);
   } catch (e) {
     toastError(e.message);
   }
 }
 
-// 选题 → 标记已发布（给关联发布包卡打标签）
-async function markPublished(item) {
+// ---- 工序勾选 ----
+async function toggleFlow(w) {
   try {
-    const tags = [...new Set([...(item.tags || []), '已发布'])];
-    await patchItem(item.id, { tags });
-    toastSuccess('已标记为「已发布」');
+    const next = w.status === 'done' ? 'pending' : 'done';
+    await patchTodo(w.id, { status: next });
+    if (next === 'done') toastSuccess('工序已完成 ✓');
     await load();
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
+function startAddFlow(it) {
+  addingFlowFor.value = it.id;
+  newFlowTitle.value = '';
+}
+async function addFlow(it) {
+  const title = newFlowTitle.value.trim();
+  if (!title) return;
+  try {
+    await createTodo({ title, line: 'media', source_item_id: it.id, topic_id: it.topic_id || undefined });
+    newFlowTitle.value = '';
+    addingFlowFor.value = null;
+    toastSuccess('工序已添加');
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
+// ---- 状态 B：挂载图片资产（本地 Agent 截图/生图后登记，或直接贴图床 URL） ----
+async function attachAsset(it, presetType = 'upload') {
+  const url = prompt('贴入图片 URL（本地 Agent 截图/生图上传图床后的链接）：');
+  if (!url || !/^https?:\/\//.test(url.trim())) return;
+  try {
+    await createAsset({ item_id: it.id, asset_type: presetType, remote_url: url.trim() });
+    toastSuccess('资产已挂载 🖼');
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
+// ---- 状态 C：一键生成发布包（posts 表，小红书默认） ----
+async function makePackage(it) {
+  try {
+    const body = [
+      it.summary,
+      ...(it.key_points || []).map((k, i) => `${i + 1}. ${k}`),
+    ].join('\n\n');
+    await createPost({
+      source_item_id: it.id,
+      topic_id: it.topic_id || undefined,
+      platform: 'xiaohongshu',
+      title: it.title,
+      content_body: body,
+      asset_ids: assetsOf(it).map((a) => a.id),
+    });
+    toastSuccess('发布包已生成，去「发布包」检查文案 📦');
+    tab.value = 'packages';
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
+// ---- 状态 D：发布包操作 ----
+async function copyPost(p) {
+  const text = `${p.title}\n\n${p.content_body}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    toastSuccess('文案已复制 📋');
+  } catch {
+    toastError('复制失败（浏览器未授权剪贴板）');
+  }
+}
+
+async function publishPost(p) {
+  const url = prompt('发布成功后的回执链接（可留空）：') || '';
+  try {
+    await patchPost(p.id, { status: 'published', published_url: url || undefined });
+    toastSuccess('已盖章「已发布」🚀');
   } catch (e) {
     toastError(e.message);
   }
@@ -106,7 +180,7 @@ async function openDetail(item) {
   detailItem.value = await fetchItem(item.id);
 }
 
-// 快速新建选题
+// 快速新建选题（「选题｜」前缀 → 后端自动识别为 idea 形态，不再打 #选题 标签）
 const newTopic = ref('');
 const creating = ref(false);
 async function createTopic() {
@@ -114,18 +188,14 @@ async function createTopic() {
   if (!title) return;
   creating.value = true;
   try {
-    const res = await processInput({
+    await processInput({
       content: `选题｜${title}`,
       line: 'media',
       preferred_category: 'media',
       user_note: `选题库｜来源=手动录入｜${new Date().toISOString().slice(0, 10)}`,
     });
-    await patchItem(res.processed_item.id, {
-      tags: [...new Set([...(res.processed_item.tags || []), '选题'])],
-    });
     newTopic.value = '';
-    toastSuccess('选题已加入选题库');
-    await load();
+    toastSuccess('选题已加入流水线');
   } catch (e) {
     toastError(e.message);
   } finally {
@@ -145,9 +215,9 @@ async function createTopic() {
         </div>
       </div>
       <div class="content-view__head-stats">
-        <span><b>{{ topics.length }}</b> 选题</span>
-        <span><b>{{ workflows.length }}</b> 工序</span>
-        <span><b>{{ packages.length }}</b> 发布包</span>
+        <span><b>{{ ideas.length }}</b> 选题</span>
+        <span><b>{{ workflows.length }}</b> 待推工序</span>
+        <span><b>{{ posts.filter((p) => p.status !== 'published').length }}</b> 待发帖</span>
       </div>
     </header>
 
@@ -164,88 +234,129 @@ async function createTopic() {
       </button>
     </div>
 
-    <!-- 流水线步进器：选题 ─▶ 工序 ─▶ 发布包 -->
-    <div class="stepper" role="tablist">
-      <template v-for="(s, i) in STEPS" :key="s.key">
-        <span v-if="i > 0" class="stepper__link" aria-hidden="true" />
-        <button
-          class="stepper__step"
-          :class="{ 'is-active': tab === s.key }"
-          role="tab"
-          :aria-selected="tab === s.key"
-          @click="tab = s.key"
-        >
-          <span class="stepper__icon">{{ s.icon }}</span>
-          <span class="stepper__label">{{ s.label }}</span>
-          <span class="stepper__count">{{ counts[s.key] }}</span>
-        </button>
-      </template>
+    <!-- 流水线进度条（只读状态灯）+ 两个工作区 Tab -->
+    <div class="content-view__pipebar">
+      <div class="pipebar" aria-hidden="true">
+        <span class="pipebar__node is-on">💡 选题 {{ ideas.length }}</span>
+        <span class="pipebar__link" />
+        <span class="pipebar__node" :class="{ 'is-on': workflows.length }">🔨 工序 {{ workflows.length }}</span>
+        <span class="pipebar__link" />
+        <span class="pipebar__node" :class="{ 'is-on': posts.length }">📦 发布包 {{ posts.length }}</span>
+      </div>
+      <div class="content-view__tabs">
+        <button class="stepper__step" :class="{ 'is-active': tab === 'pipeline' }" @click="tab = 'pipeline'">💡 选题流水线</button>
+        <button class="stepper__step" :class="{ 'is-active': tab === 'packages' }" @click="tab = 'packages'">📦 发布包</button>
+      </div>
     </div>
 
-    <!-- 选题库 -->
-    <template v-if="tab === '选题库'">
-      <div v-if="topics.length" class="content-view__grid">
-        <button v-for="it in topics" :key="it.id" class="content-card glass-card glass-card--hover" @click="openDetail(it)">
-          <div class="content-card__role">💡 选题</div>
-          <h3 class="content-card__title">{{ it.title }}</h3>
-          <p class="content-card__summary">{{ it.summary }}</p>
-          <div class="content-card__meta">
-            <span class="timestamp">{{ timeAgo(it.created_at) }}</span>
-            <span v-if="it.todo_count" class="content-card__badge">⚙️ {{ it.todo_count }}</span>
-          </div>
-        </button>
-      </div>
-      <EmptyState v-else icon="💡" title="选题库还是空的" desc="在上方记一个选题，或让 Agent 搜素材后聚类沉淀" />
-    </template>
-
-    <!-- 内容工序（按来源选题分组） -->
-    <template v-else-if="tab === '内容工序'">
-      <div v-if="workflowGroups.length" class="content-view__groups">
-        <section v-for="(g, gi) in workflowGroups" :key="gi" class="glass-panel content-view__group">
-          <header class="content-view__group-head">
-            <span class="content-view__group-title">{{ g.title }}</span>
-            <span class="content-view__count">{{ g.todos.length }}</span>
+    <!-- ===== 选题流水线：母子一体化 Pipeline Card ===== -->
+    <template v-if="tab === 'pipeline'">
+      <div v-if="loading" class="content-view__loading"><span class="spinner" /> 加载中…</div>
+      <div v-else-if="ideas.length" class="pipeline">
+        <article v-for="it in ideas" :key="it.id" class="pipeline__card glass-panel">
+          <!-- 母卡：选题信息 -->
+          <header class="pipeline__head" @click="openDetail(it)">
+            <div class="pipeline__role">
+              💡 选题
+              <span v-if="it.topic_name" class="pipeline__topic">📁 {{ it.topic_name }}</span>
+              <span class="pipeline__stage" :data-stage="stageOf(it)">
+                {{ stageOf(it) === 'A' ? '待拆解' : stageOf(it) === 'B' ? '制作中' : '可打包' }}
+              </span>
+            </div>
+            <h3 class="pipeline__title">{{ it.title }}</h3>
+            <p class="pipeline__summary">{{ it.summary }}</p>
           </header>
-          <div class="content-view__group-body">
-            <div v-for="w in g.todos" :key="w.id" class="content-view__task">
-              <button class="content-view__check" :title="'标记完成'" @click="toggleWorkflow(w)">○</button>
-              <span class="content-view__task-title">{{ w.title }}</span>
+
+          <!-- 资产槽：Agent 截图 / 生图缩略图 + 挂载入口 -->
+          <div class="pipeline__assets">
+            <template v-for="a in assetsOf(it).slice(0, 6)" :key="a.id">
+              <a v-if="a.remote_url" class="pipeline__asset" :href="a.remote_url" target="_blank" rel="noopener" :title="a.prompt || a.asset_type">
+                <img :src="a.remote_url" loading="lazy" alt="" />
+              </a>
+              <span v-else class="pipeline__asset pipeline__asset--local" :title="a.local_path">📎</span>
+            </template>
+            <button class="pipeline__asset-add" title="挂载截图/生图（贴图床 URL 入 assets 表）" @click="attachAsset(it, 'upload')">＋ 图片</button>
+          </div>
+
+          <!-- 子列表：内嵌工序（可直接勾） -->
+          <div class="pipeline__flows">
+            <div v-for="w in pendingOf(it)" :key="w.id" class="pipeline__flow">
+              <button class="pipeline__check" title="完成工序" @click="toggleFlow(w)">○</button>
+              <span class="pipeline__flow-title">{{ w.title }}</span>
               <span class="priority-dot" :class="`priority-dot--${w.priority}`" />
             </div>
+            <div v-for="w in (doneByItem[it.id] || [])" :key="`d-${w.id}`" class="pipeline__flow is-done">
+              <span class="pipeline__check is-checked">✓</span>
+              <span class="pipeline__flow-title">{{ w.title }}</span>
+            </div>
+
+            <!-- 内联添加工序 -->
+            <div v-if="addingFlowFor === it.id" class="pipeline__addflow">
+              <input
+                v-model="newFlowTitle"
+                class="glass-input pipeline__addflow-input"
+                placeholder="新工序（如：截一张对比表格图）"
+                autofocus
+                @keydown.enter="addFlow(it)"
+                @keydown.esc="addingFlowFor = null"
+              />
+              <button class="btn btn--glass btn--sm" @click="addFlow(it)">加入</button>
+            </div>
+            <button v-else class="pipeline__flow-add" @click="startAddFlow(it)">＋ 添加工序</button>
           </div>
-        </section>
+
+          <!-- 状态机 CTA：任何时刻只有一个高亮主按钮 -->
+          <footer class="pipeline__cta">
+            <template v-if="stageOf(it) === 'A'">
+              <button class="btn btn--primary pipeline__btn" @click="bootstrapFlows(it)">⚡ 让 Agent 拆解工序</button>
+            </template>
+            <template v-else-if="stageOf(it) === 'B'">
+              <span class="pipeline__hint">工序 {{ (doneByItem[it.id] || []).length }}/{{ flowsOf(it).length }} · 配图 {{ assetsOf(it).length }} 张</span>
+              <button class="btn btn--glass pipeline__btn" @click="attachAsset(it, 'ai_image')">🖼 挂载配图</button>
+              <button class="btn btn--glass pipeline__btn" :disabled="!assetsOf(it).length" title="工序勾完后可打包" @click="makePackage(it)">📦 生成发布包</button>
+            </template>
+            <template v-else>
+              <span class="pipeline__hint">✅ 工序全部完成 · 配图 {{ assetsOf(it).length }} 张</span>
+              <button class="btn btn--primary pipeline__btn" @click="makePackage(it)">📦 一键生成发布包 →</button>
+            </template>
+          </footer>
+        </article>
       </div>
-      <EmptyState v-else icon="⚙️" title="没有待推进的内容工序" desc="录入媒体线素材后，Agent 会提取内容工序（撰写/拆解/成稿…）" />
+      <EmptyState v-else icon="💡" title="选题库还是空的" desc="在上方记一个选题，或从信息库把跑通的经验卡「转为选题」" />
     </template>
 
-    <!-- 发布包（卡包式：未发布在前，已发布盖 PUBLISHED 印章置灰沉底） -->
+    <!-- ===== 发布包：posts 表（仿真社媒待发帖） ===== -->
     <template v-else>
-      <div v-if="sortedPackages.length" class="content-view__grid">
+      <div v-if="loading" class="content-view__loading"><span class="spinner" /> 加载中…</div>
+      <div v-else-if="posts.length" class="content-view__grid">
         <article
-          v-for="it in sortedPackages"
-          :key="it.id"
+          v-for="p in posts"
+          :key="p.id"
           class="pack glass-card glass-card--hover"
-          :class="{ 'pack--published': (it.tags || []).includes('已发布') }"
-          @click="openDetail(it)"
+          :class="{ 'pack--published': p.status === 'published' }"
         >
           <div class="pack__strip" aria-hidden="true" />
           <div class="pack__role">
-            📦 发布包
-            <span v-if="(it.tags || []).includes('已发布')" class="pack__stamp">PUBLISHED</span>
+            {{ POST_PLATFORM_MAP[p.platform]?.icon }} {{ POST_PLATFORM_MAP[p.platform]?.label || p.platform }}
+            · {{ POST_STATUS_MAP[p.status] || p.status }}
+            <span v-if="p.status === 'published'" class="pack__stamp">PUBLISHED</span>
           </div>
-          <h3 class="content-card__title">{{ it.title }}</h3>
-          <p class="content-card__summary">{{ it.summary }}</p>
-          <div class="content-card__meta">
-            <span class="timestamp">{{ timeAgo(it.created_at) }}</span>
-            <span
-              v-if="!(it.tags || []).includes('已发布')"
-              class="content-card__action"
-              @click.stop="markPublished(it)"
-            >标记已发布</span>
+          <h3 class="pack__title">{{ p.title }}</h3>
+          <p class="pack__body">{{ p.content_body }}</p>
+          <div class="pack__meta">
+            <span class="timestamp">🖼 {{ (p.asset_ids || []).length }} 配图 · {{ timeAgo(p.created_at) }}</span>
+            <a v-if="p.published_url" class="pack__receipt" :href="p.published_url" target="_blank" rel="noopener">回执 ↗</a>
           </div>
+          <footer v-if="p.status !== 'published'" class="pack__actions">
+            <button class="btn btn--glass btn--sm" @click="copyPost(p)">📋 复制文案</button>
+            <button class="btn btn--primary btn--sm" @click="publishPost(p)">🚀 标为已发布</button>
+          </footer>
+          <footer v-else class="pack__actions">
+            <button class="btn btn--glass btn--sm" @click="copyPost(p)">📋 复制文案</button>
+          </footer>
         </article>
       </div>
-      <EmptyState v-else icon="📦" title="还没有发布包" desc="基于选题生成多平台内容包后，会出现在这里（每平台一张卡）" />
+      <EmptyState v-else icon="📦" title="还没有发布包" desc="在选题流水线里把工序勾完，点「生成发布包」就会出现在这里" />
     </template>
 
     <ItemDetailModal
@@ -259,9 +370,12 @@ async function createTopic() {
   </div>
 </template>
 
-<!-- 流水线步进器样式 + 母子卡 + 卡包 -->
 <style scoped>
 .content-view { display: flex; flex-direction: column; gap: var(--space-8); }
+.content-view__loading {
+  display: flex; align-items: center; justify-content: center; gap: var(--space-4);
+  padding: var(--space-14); color: var(--text-secondary); font: var(--font-secondary);
+}
 
 .content-view__head {
   display: flex; align-items: center; justify-content: space-between;
@@ -277,170 +391,152 @@ async function createTopic() {
 .content-view__create { display: flex; gap: var(--space-4); padding: var(--space-7); }
 .content-view__create-input { flex: 1; }
 
-/* ===== 流水线步进器 ===== */
-.stepper {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  flex-wrap: wrap;
+/* ===== 流水线进度条 + 工作区切换 ===== */
+.content-view__pipebar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); flex-wrap: wrap;
 }
+.pipebar { display: flex; align-items: center; gap: var(--space-4); }
+.pipebar__node {
+  font: var(--font-caption); color: var(--text-muted);
+  padding: 5px 14px; border-radius: var(--radius-full);
+  border: 1px dashed var(--glass-border);
+  white-space: nowrap; transition: all var(--transition-fast);
+}
+.pipebar__node.is-on {
+  color: var(--line-media); border-style: solid; border-color: color-mix(in srgb, var(--line-media) 45%, transparent);
+  background: color-mix(in srgb, var(--line-media) 8%, transparent);
+}
+.pipebar__link {
+  width: 22px; height: 1.5px;
+  background: linear-gradient(90deg, var(--glass-border-hover), color-mix(in srgb, var(--line-media) 55%, transparent));
+}
+.content-view__tabs { display: flex; gap: var(--space-4); }
+
 .stepper__step {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: 10px 20px;
-  font: var(--font-secondary);
-  font-weight: 600;
-  color: var(--text-secondary);
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: var(--radius-full);
-  backdrop-filter: blur(var(--blur-base));
-  -webkit-backdrop-filter: blur(var(--blur-base));
-  transition: all var(--transition-fast);
-  white-space: nowrap;
+  display: inline-flex; align-items: center; gap: var(--space-3);
+  padding: 10px 20px; font: var(--font-secondary); font-weight: 600;
+  color: var(--text-secondary); background: var(--glass-bg);
+  border: 1px solid var(--glass-border); border-radius: var(--radius-full);
+  backdrop-filter: blur(var(--blur-base)); -webkit-backdrop-filter: blur(var(--blur-base));
+  transition: all var(--transition-fast); white-space: nowrap;
 }
 .stepper__step:hover { color: var(--text-primary); border-color: var(--glass-border-hover); }
 .stepper__step.is-active {
-  color: var(--text-primary);
-  background: var(--glass-bg-strong);
+  color: var(--text-primary); background: var(--glass-bg-strong);
   border-color: color-mix(in srgb, var(--line-media) 45%, transparent);
   box-shadow: 0 2px 12px rgba(234, 88, 12, 0.14), inset 0 1px 0 var(--glass-highlight);
 }
-.stepper__step.is-active .stepper__count {
-  color: var(--line-media);
-  background: color-mix(in srgb, var(--line-media) 12%, transparent);
-}
-.stepper__icon { font-size: 14px; }
-.stepper__count {
-  padding: 0 8px;
-  font: var(--font-micro);
-  font-weight: 500;
-  color: var(--text-secondary);
-  background: rgba(15, 23, 42, 0.06);
-  border-radius: var(--radius-full);
-}
-.stepper__link {
-  width: 26px;
-  height: 1.5px;
-  background: linear-gradient(90deg, var(--glass-border-hover), color-mix(in srgb, var(--line-media) 55%, transparent));
-  position: relative;
-  flex-shrink: 0;
-}
-.stepper__link::after {
-  content: '';
-  position: absolute;
-  right: -1px;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border-top: 1.5px solid color-mix(in srgb, var(--line-media) 55%, transparent);
-  border-right: 1.5px solid color-mix(in srgb, var(--line-media) 55%, transparent);
-  transform: translateY(-50%) rotate(45deg);
-}
 
-/* ===== 选题 / 卡片通用 ===== */
-.content-view__grid {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-7);
-}
-.content-card { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-8); text-align: left; }
-.content-card__role {
-  font: var(--font-micro); color: var(--accent-purple); display: flex; align-items: center; gap: var(--space-3);
-}
-.content-card__title { font: var(--font-h3); color: var(--text-primary); line-height: 1.4; }
-.content-card__summary {
-  font: var(--font-caption); color: var(--text-secondary); line-height: 1.6;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
-}
-.content-card__meta { display: flex; align-items: center; justify-content: space-between; margin-top: auto; }
-.content-card__badge { font: var(--font-micro); color: var(--text-secondary); }
-.content-card__action {
-  font: var(--font-micro); color: var(--accent-cyan); cursor: pointer; padding: 2px 8px;
-  border: 1px solid rgba(8, 145, 178, 0.35); border-radius: var(--radius-full);
-}
-.content-card__action:hover { background: rgba(8, 145, 178, 0.12); }
-
-/* ===== 内容工序：母子嵌套卡（外层=来源选题，内嵌工序 Checkbox） ===== */
-.content-view__groups { display: flex; flex-direction: column; gap: var(--space-7); }
-.content-view__group {
+/* ===== Pipeline Card：母卡 + 资产槽 + 内嵌工序 + CTA ===== */
+.pipeline { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--space-7); }
+.pipeline__card {
+  display: flex; flex-direction: column; gap: var(--space-5);
+  padding: var(--space-9);
   border-top: 2px solid color-mix(in srgb, var(--line-media) 55%, transparent);
 }
-.content-view__group-head {
-  display: flex; align-items: center; justify-content: space-between;
-  font: var(--font-h3); padding: var(--space-7) var(--space-9);
-  border-bottom: 1px solid var(--glass-border);
+.pipeline__head { cursor: pointer; display: flex; flex-direction: column; gap: var(--space-3); }
+.pipeline__role { font: var(--font-micro); color: var(--accent-purple); display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.pipeline__topic {
+  color: var(--accent-blue); border: 1px solid rgba(37, 99, 235, 0.3);
+  background: rgba(37, 99, 235, 0.07); padding: 1px 9px; border-radius: var(--radius-full);
 }
-.content-view__group-title { color: var(--text-primary); }
-.content-view__group-body { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-7); }
-.content-view__task {
-  display: flex; align-items: center; gap: var(--space-5);
-  padding: var(--space-4) var(--space-6); background: var(--glass-bg-faint);
+.pipeline__stage { padding: 1px 9px; border-radius: var(--radius-full); border: 1px solid var(--glass-border); color: var(--text-secondary); }
+.pipeline__stage[data-stage="A"] { color: var(--accent-orange); border-color: rgba(251, 146, 60, 0.4); }
+.pipeline__stage[data-stage="B"] { color: var(--accent-cyan); border-color: rgba(6, 182, 212, 0.4); }
+.pipeline__stage[data-stage="C"] { color: var(--accent-green); border-color: rgba(5, 150, 105, 0.4); }
+.pipeline__title { font: var(--font-h3); color: var(--text-primary); line-height: 1.4; }
+.pipeline__summary {
+  font: var(--font-caption); color: var(--text-secondary); line-height: 1.6;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* 资产槽 */
+.pipeline__assets { display: flex; gap: var(--space-3); overflow-x: auto; padding-bottom: 2px; }
+.pipeline__asset {
+  width: 72px; height: 54px; flex-shrink: 0; border-radius: var(--radius-sm);
+  overflow: hidden; border: 1px solid var(--glass-border);
+  display: flex; align-items: center; justify-content: center; font-size: 16px;
+}
+.pipeline__asset img { width: 100%; height: 100%; object-fit: cover; }
+.pipeline__asset--local { border-style: dashed; color: var(--text-muted); }
+.pipeline__asset-add {
+  width: 72px; height: 54px; flex-shrink: 0; border-radius: var(--radius-sm);
+  border: 1.5px dashed var(--glass-border-hover); color: var(--text-muted);
+  font: var(--font-micro); transition: all var(--transition-fast);
+}
+.pipeline__asset-add:hover { color: var(--line-media); border-color: var(--line-media); background: color-mix(in srgb, var(--line-media) 8%, transparent); }
+
+/* 内嵌工序 */
+.pipeline__flows { display: flex; flex-direction: column; gap: var(--space-2); }
+.pipeline__flow {
+  display: flex; align-items: center; gap: var(--space-4);
+  padding: var(--space-3) var(--space-5); background: var(--glass-bg-faint);
   border: 1px solid transparent; border-radius: var(--radius-sm);
   transition: border-color var(--transition-fast), background var(--transition-fast);
 }
-.content-view__task:hover { border-color: var(--glass-border); background: var(--glass-hover); }
-
-/* 圆形 Checkbox：hover 泛绿 + 勾 */
-.content-view__check {
-  width: 20px;
-  height: 20px;
-  min-width: 20px;
-  border-radius: 50%;
-  border: 1.5px solid var(--glass-border-hover);
-  background: var(--bg-secondary);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  color: transparent;
-  transition: all var(--transition-fast);
+.pipeline__flow:hover { border-color: var(--glass-border); background: var(--glass-hover); }
+.pipeline__flow.is-done { opacity: 0.55; }
+.pipeline__flow.is-done .pipeline__flow-title { text-decoration: line-through; }
+.pipeline__check {
+  width: 19px; height: 19px; min-width: 19px; border-radius: 50%;
+  border: 1.5px solid var(--glass-border-hover); background: var(--bg-secondary);
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; color: transparent; transition: all var(--transition-fast);
 }
-.content-view__check::after { content: '✓'; }
-.content-view__check:hover {
-  border-color: var(--accent-green);
-  color: var(--accent-green);
-  background: rgba(5, 150, 105, 0.12);
-  box-shadow: 0 0 8px rgba(5, 150, 105, 0.25);
+.pipeline__check:hover {
+  border-color: var(--accent-green); color: var(--accent-green);
+  background: rgba(5, 150, 105, 0.12); box-shadow: 0 0 8px rgba(5, 150, 105, 0.25);
 }
-.content-view__task-title { flex: 1; font: var(--font-secondary); color: var(--text-primary); }
+.pipeline__check.is-checked { border-color: var(--accent-green); color: var(--accent-green); background: rgba(5, 150, 105, 0.1); cursor: default; }
+.pipeline__flow-title { flex: 1; font: var(--font-secondary); color: var(--text-primary); }
+.pipeline__flow-add {
+  align-self: flex-start; font: var(--font-micro); color: var(--text-muted);
+  padding: var(--space-2) var(--space-4); border: 1px dashed var(--glass-border);
+  border-radius: var(--radius-sm); transition: all var(--transition-fast);
+}
+.pipeline__flow-add:hover { color: var(--line-media); border-color: var(--line-media); }
+.pipeline__addflow { display: flex; gap: var(--space-3); }
+.pipeline__addflow-input { flex: 1; padding: 7px 12px; font: var(--font-caption); }
 
-/* ===== 发布包：Apple Wallet 卡包式 ===== */
+/* CTA 行 */
+.pipeline__cta {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--space-4);
+  padding-top: var(--space-4); border-top: 1px solid var(--glass-border); flex-wrap: wrap;
+}
+.pipeline__hint { font: var(--font-micro); color: var(--text-secondary); margin-right: auto; }
+
+/* ===== 发布包 ===== */
+.content-view__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--space-7); }
 .pack {
-  position: relative;
-  overflow: hidden;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-8);
-  text-align: left;
+  position: relative; overflow: hidden;
+  display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-8); text-align: left;
 }
 .pack__strip {
-  height: 4px;
-  margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-8)) var(--space-6);
-  background: var(--gradient-media);
-  opacity: 0.9;
+  height: 4px; margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-8)) var(--space-6);
+  background: var(--gradient-media); opacity: 0.9;
 }
 .pack--published { opacity: 0.6; }
 .pack--published .pack__strip { background: var(--glass-border); }
-.pack--published .content-card__title,
-.pack--published .content-card__summary { color: var(--text-secondary); }
-.pack__role {
-  font: var(--font-micro); color: var(--line-media);
-  display: flex; align-items: center; gap: var(--space-3);
-}
+.pack__role { font: var(--font-micro); color: var(--line-media); display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .pack__stamp {
-  margin-left: auto;
-  font: var(--font-micro);
-  font-weight: 700;
-  letter-spacing: 1.5px;
+  margin-left: auto; font: var(--font-micro); font-weight: 700; letter-spacing: 1.5px;
   color: var(--accent-green);
   border: 2px solid color-mix(in srgb, var(--accent-green) 55%, transparent);
-  background: rgba(5, 150, 105, 0.1);
-  padding: 2px 10px;
-  border-radius: var(--radius-full);
-  transform: rotate(-6deg);
-  box-shadow: 0 0 12px rgba(5, 150, 105, 0.2);
+  background: rgba(5, 150, 105, 0.1); padding: 2px 10px; border-radius: var(--radius-full);
+  transform: rotate(-6deg); box-shadow: 0 0 12px rgba(5, 150, 105, 0.2);
+}
+.pack__title { font: var(--font-h3); color: var(--text-primary); line-height: 1.4; }
+.pack__body {
+  font: var(--font-caption); color: var(--text-secondary); line-height: 1.6; flex: 1;
+  display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden;
+  white-space: pre-wrap;
+}
+.pack__meta { display: flex; align-items: center; justify-content: space-between; }
+.pack__receipt { font: var(--font-caption); color: var(--accent-cyan); text-decoration: none; }
+.pack__receipt:hover { text-decoration: underline; }
+.pack__actions { display: flex; gap: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--glass-border); }
+
+@media (max-width: 768px) {
+  .pipeline { grid-template-columns: 1fr; }
 }
 </style>

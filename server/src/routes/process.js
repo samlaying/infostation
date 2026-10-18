@@ -23,6 +23,8 @@ processRouter.post('/process', async (req, res, next) => {
       user_note = '',
       user_context = '',
       line,
+      topic_id,
+      skills = [],
     } = req.body || {};
 
     if (!content || !String(content).trim()) {
@@ -31,6 +33,14 @@ processRouter.post('/process', async (req, res, next) => {
     const rawContent = String(content).trim();
     // 默认归 TODO 线；自媒体线需显式传 line=media
     const targetLine = isValidLine(line) ? line : 'trial';
+    // v2.1：UI 主题选择器直挂（显式指定优先于 Agent 主题识别）
+    const validSkills = Array.isArray(skills) ? skills.filter((s) => ['screenshot', 'ai_image'].includes(s)) : [];
+    let explicitTopicId = null;
+    if (Number.isFinite(Number(topic_id))) {
+      const t = db.prepare('SELECT id FROM topics WHERE id = ?').get(Number(topic_id));
+      if (!t) return res.status(400).json({ error: '主题不存在' });
+      explicitTopicId = t.id;
+    }
 
     // ---- Step 1: URL 输入先抓取 ----
     let rawInput;
@@ -111,8 +121,9 @@ processRouter.post('/process', async (req, res, next) => {
     });
 
     // ---- v2.0：主题解析（Agent 返回主题名 → topic_id；新主题自动建档）----
-    let topicId = null;
-    if (result.topic) {
+    // v2.1：UI 显式指定 topic_id 时直接采用，跳过 Agent 猜测
+    let topicId = explicitTopicId;
+    if (!topicId && result.topic) {
       const hit = topicRows.find((t) => t.name === result.topic);
       if (hit) {
         topicId = hit.id;
@@ -134,6 +145,15 @@ processRouter.post('/process', async (req, res, next) => {
 
     if (extractWarning) {
       result.agent_note = `${extractWarning}\n${result.agent_note || ''}`.trim();
+    }
+    // v2.1：Agent 技能开关（UI 点亮 📸截图/🎨生图）——记入 raw_input 与 agent_note，
+    // 本地 Agent（CLI/Skill）处理该卡片时据此启动浏览器截图或生图并回填 assets
+    if (validSkills.length) {
+      rawInput.skills = validSkills;
+      const skillText = validSkills.includes('screenshot') && validSkills.includes('ai_image')
+        ? '待执行：Agent 网页截图 + AI 生成配图'
+        : validSkills.includes('screenshot') ? '待执行：Agent 网页截图' : '待执行：AI 生成配图';
+      result.agent_note = `${skillText}\n${result.agent_note || ''}`.trim();
     }
 
     // ---- Step 4: 事务落库 ----
