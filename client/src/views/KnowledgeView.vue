@@ -1,23 +1,21 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
 import { useItemsStore } from '../stores/items';
-import { useStatsStore } from '../stores/stats';
-import { api } from '../api';
+import { useTopicsStore } from '../stores/topics';
 import FilterBar from '../components/FilterBar.vue';
 import ItemCard from '../components/ItemCard.vue';
+import ItemInspector from '../components/ItemInspector.vue';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
 import EmptyState from '../components/EmptyState.vue';
-import CategoryBars from '../components/CategoryBars.vue';
-import TagCloud from '../components/TagCloud.vue';
 import TopicDock from '../components/TopicDock.vue';
 import SegmentTabs from '../components/SegmentTabs.vue';
 import { useLiveReload } from '../api/live';
 
 const itemsStore = useItemsStore();
-const statsStore = useStatsStore();
+const topicsStore = useTopicsStore();
 
-const detailItem = ref(null);
-const pagination = ref({ page: 1 });
+const detailItem = ref(null);   // Inspector 内容（选中卡片）
+const editingItem = ref(null);  // Modal 编辑
 
 // 三态透镜：全部 / 仅看代试 / 仅看内容（化解两条线的“半隔离”观感）
 const LENS = [
@@ -31,11 +29,11 @@ const lens = computed({
 });
 
 onMounted(async () => {
-  await Promise.all([itemsStore.load(1), statsStore.load()]);
+  await Promise.all([itemsStore.load(1), topicsStore.load(true)]);
 });
 
-// SSE：卡片/主题变更后自动刷新当前页与统计
-useLiveReload(() => { itemsStore.refresh(); statsStore.load(); }, ['items', 'topics']);
+// SSE：卡片/主题变更后自动刷新当前页与主题计数
+useLiveReload(() => { itemsStore.refresh(); topicsStore.refresh(); }, ['items', 'topics']);
 
 watch(
   () => itemsStore.filters,
@@ -51,21 +49,30 @@ function onTopicSelect(topicId) {
   applyFilters({ topic_id: topicId ?? '', q: '' }); // 切主题清空关键词，避免过滤打架
 }
 
-async function openDetail(item) {
+async function selectItem(item) {
   detailItem.value = await itemsStore.getDetail(item.id);
+}
+
+async function selectById(id) {
+  detailItem.value = await itemsStore.getDetail(id);
+}
+
+function startEdit() {
+  if (detailItem.value) editingItem.value = detailItem.value;
 }
 
 async function removeItem(item) {
   if (!confirm(`确定删除「${item.title}」及其 TODO？`)) return;
   await itemsStore.remove(item.id);
+  if (detailItem.value?.id === item.id) detailItem.value = null;
 }
 
 const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pageSize));
 </script>
 
 <template>
-  <div class="knowledge">
-    <!-- 左：主题抽屉（长期主题，显式创建的空间概念） -->
+  <div class="knowledge" :class="{ 'knowledge--inspecting': !!detailItem }">
+    <!-- 左：主题抽屉（长期主题，唯一归属轴） -->
     <TopicDock :active="itemsStore.filters.topic_id ? Number(itemsStore.filters.topic_id) : null" @select="onTopicSelect" />
 
     <div class="knowledge__main">
@@ -78,7 +85,6 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
       <FilterBar
         class="glass-panel knowledge__filterbar"
         :filters="itemsStore.filters"
-        hide-line
         @update:filters="applyFilters"
       />
 
@@ -92,7 +98,8 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
           :key="item.id"
           :item="item"
           :index="i"
-          @open="openDetail"
+          :selected="detailItem?.id === item.id"
+          @open="selectItem"
           @delete="removeItem"
         />
       </div>
@@ -111,38 +118,30 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
       </div>
     </div>
 
-    <!-- 侧边栏（guide.md 10.4：340px sticky） -->
-    <aside class="knowledge__sidebar">
-      <section class="glass-panel knowledge__side-card">
-        <h2 class="knowledge__side-title">📊 分类分布</h2>
-        <CategoryBars :data="statsStore.data?.category_distribution || []" mode="category" />
-      </section>
-
-      <section class="glass-panel knowledge__side-card">
-        <h2 class="knowledge__side-title">🏷 标签云</h2>
-        <TagCloud :tags="statsStore.data?.top_tags || []" @select="(t) => applyFilters({ q: t })" />
-      </section>
-
-      <section class="glass-panel knowledge__side-card">
-        <h2 class="knowledge__side-title">🕐 最近活动</h2>
-        <div v-if="itemsStore.list.length" class="knowledge__activity">
-          <div v-for="it in itemsStore.list.slice(0, 6)" :key="it.id" class="knowledge__activity-row">
-            <span class="knowledge__activity-icon">＋</span>
-            <span class="knowledge__activity-text">处理了「{{ it.title.slice(0, 16) }}」</span>
-            <span class="timestamp">{{ it.created_at.slice(5, 10) }}</span>
-          </div>
-        </div>
-        <div v-else class="timestamp">暂无活动</div>
-      </section>
-    </aside>
-
-    <ItemDetailModal
+    <!-- 右：选中卡片的详情 Inspector（深读 + 资产预览 + 打勾 TODO） -->
+    <ItemInspector
       v-if="detailItem"
+      class="knowledge__inspector"
       :item="detailItem"
       @close="detailItem = null"
-      @updated="itemsStore.refresh(); statsStore.load()"
-      @deleted="detailItem = null; itemsStore.refresh(); statsStore.load()"
-      @open-related="openDetail({ id: $event })"
+      @edit="startEdit"
+      @open-related="selectById"
+    />
+    <aside v-else class="knowledge__placeholder">
+      <div class="glass-panel knowledge__placeholder-card">
+        <span class="knowledge__placeholder-icon">🗂</span>
+        <p>点击左侧任意卡片<br />在这里深读正文、预览截图、勾掉 TODO</p>
+      </div>
+    </aside>
+
+    <!-- 编辑仍走 Modal（Inspector 只读 + 勾选） -->
+    <ItemDetailModal
+      v-if="editingItem"
+      :item="editingItem"
+      @close="editingItem = null"
+      @updated="editingItem = null; if (detailItem) selectById(detailItem.id); itemsStore.refresh()"
+      @deleted="editingItem = null; detailItem = null; itemsStore.refresh()"
+      @open-related="selectById"
     />
   </div>
 </template>
@@ -194,35 +193,23 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
   margin-top: var(--space-9);
 }
 
-.knowledge__sidebar {
+.knowledge__inspector { grid-column: 3; grid-row: 1; }
+
+.knowledge__placeholder {
+  grid-column: 3;
+  grid-row: 1;
   position: sticky;
   top: 88px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-9);
 }
-
-.knowledge__side-card { padding: var(--space-9); }
-.knowledge__side-title {
-  font: var(--font-h3);
-  margin-bottom: var(--space-7);
+.knowledge__placeholder-card {
+  padding: var(--space-14) var(--space-9);
+  text-align: center;
+  color: var(--text-muted);
+  font: var(--font-secondary);
+  line-height: 1.8;
+  border-style: dashed;
 }
-
-.knowledge__activity { display: flex; flex-direction: column; gap: var(--space-4); }
-.knowledge__activity-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  font: var(--font-micro);
-}
-.knowledge__activity-icon { color: var(--accent-green); }
-.knowledge__activity-text {
-  flex: 1;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.knowledge__placeholder-icon { font-size: 30px; display: block; margin-bottom: var(--space-5); opacity: 0.7; }
 
 @media (max-width: 1280px) {
   .knowledge { grid-template-columns: minmax(0, 1fr) 340px; }
@@ -230,6 +217,11 @@ const totalPages = () => Math.max(1, Math.ceil(itemsStore.total / itemsStore.pag
 }
 @media (max-width: 1024px) {
   .knowledge { grid-template-columns: 1fr; }
-  .knowledge__sidebar { position: static; order: -1; }
+  .knowledge__inspector, .knowledge__placeholder {
+    grid-column: 1;
+    grid-row: auto;
+    position: static;
+    order: 5;
+  }
 }
 </style>

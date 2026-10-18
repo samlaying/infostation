@@ -66,6 +66,12 @@ statsRouter.get('/stats', (req, res) => {
     )
     .get();
 
+  // v2.1：卡片双线分布（数据看板「双线流水」图，替代旧 category 目标进度）
+  const itemLineDist = db
+    .prepare('SELECT line, COUNT(*) c FROM items GROUP BY line')
+    .all()
+    .reduce((acc, r) => ({ ...acc, [r.line]: r.c }), {});
+
   // 分类分布
   const categoryDist = CATEGORIES.map((cat) => ({
     category: cat,
@@ -121,6 +127,7 @@ statsRouter.get('/stats', (req, res) => {
     trend_30d: trendSeries(30),
     category_distribution: categoryDist.map((c) => ({ ...c, percent: Math.round((c.count / catTotal) * 100) })),
     platform_distribution: platformDist,
+    item_line_distribution: itemLineDist,
     top_tags: topTags,
     goal_progress: goalProgress,
   });

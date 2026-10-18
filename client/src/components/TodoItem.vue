@@ -1,7 +1,8 @@
 <script setup>
 import { computed } from 'vue';
-import { CATEGORY_MAP, PRIORITY_MAP, timeAgo, fmtDate } from '../constants';
+import { PRIORITY_MAP, LINE_MAP, timeAgo, fmtDate } from '../constants';
 import { useTodosStore } from '../stores/todos';
+import { useTopicsStore } from '../stores/topics';
 import { toastError, toastSuccess, toast } from '../stores/toast';
 
 const props = defineProps({
@@ -13,7 +14,7 @@ const props = defineProps({
 const emit = defineEmits(['open-source']);
 
 const todosStore = useTodosStore();
-const cat = computed(() => CATEGORY_MAP[props.todo.category] || CATEGORY_MAP.growth);
+const topicsStore = useTopicsStore();
 const isDone = computed(() => props.todo.status === 'done');
 const isOverdue = computed(() => {
   if (isDone.value) return false;
@@ -63,7 +64,10 @@ async function archive() {
         />
       </div>
       <div class="todo-item__meta">
-        <span class="todo-item__cat" :style="{ color: cat.color }">{{ cat.icon }} {{ cat.label }}</span>
+        <span v-if="todo.topic_id && topicsStore.nameOf(todo.topic_id)" class="todo-item__cat">
+          📁 {{ topicsStore.nameOf(todo.topic_id) }}
+        </span>
+        <span v-else class="todo-item__cat">{{ LINE_MAP[todo.line || 'trial']?.icon }} {{ LINE_MAP[todo.line || 'trial']?.short }}</span>
         <span
           v-if="todo.actual_deadline || todo.suggested_deadline"
           class="todo-item__deadline"

@@ -1,12 +1,10 @@
 <script setup>
 import { ref, watch } from 'vue';
-import { CATEGORY_MAP, CONTENT_TYPE_MAP, PRIORITY_MAP, PLATFORM_MAP } from '../constants';
+import { FORM_MAP, PRIORITY_MAP, PLATFORM_MAP } from '../constants';
 
 const props = defineProps({
   filters: { type: Object, required: true },
   searchPlaceholder: { type: String, default: '搜索标题 / 内容 / 标签…' },
-  // 产品线筛选上提为「三态透镜」时隐藏此处 chips，避免重复
-  hideLine: { type: Boolean, default: false },
 });
 const emit = defineEmits(['update:filters']);
 
@@ -56,40 +54,11 @@ function setFilter(key, value) {
       </select>
     </div>
 
-    <div v-if="!hideLine" class="filter-bar__chips">
-      <span class="filter-bar__group-label">产品线</span>
-      <button class="filter-chip" :class="{ 'is-active': !filters.line }" @click="setFilter('line', '')">全部</button>
-      <button
-        v-for="(l, key) in LINE_MAP"
-        :key="key"
-        class="filter-chip"
-        :class="{ 'is-active': filters.line === key }"
-        :title="l.desc"
-        @click="setFilter('line', filters.line === key ? '' : key)"
-      >
-        {{ l.icon }} {{ l.short }}
-      </button>
-    </div>
-
-    <div class="filter-bar__chips">
-      <span class="filter-bar__group-label">分类</span>
-      <button class="filter-chip" :class="{ 'is-active': !filters.category }" @click="setFilter('category', '')">全部</button>
-      <button
-        v-for="(c, key) in CATEGORY_MAP"
-        :key="key"
-        class="filter-chip"
-        :class="{ 'is-active': filters.category === key }"
-        @click="setFilter('category', filters.category === key ? '' : key)"
-      >
-        {{ c.icon }} {{ c.label }}
-      </button>
-    </div>
-
     <div class="filter-bar__chips">
       <span class="filter-bar__group-label">筛选</span>
-      <select class="glass-select glass-input filter-bar__select-sm" :value="filters.content_type" @change="setFilter('content_type', $event.target.value)">
-        <option value="">全部类型</option>
-        <option v-for="(t, key) in CONTENT_TYPE_MAP" :key="key" :value="key">{{ t }}</option>
+      <select class="glass-select glass-input filter-bar__select-sm" :value="filters.form" @change="setFilter('form', $event.target.value)">
+        <option value="">全部形态</option>
+        <option v-for="(f, key) in FORM_MAP" :key="key" :value="key">{{ f.icon }} {{ f.label }}</option>
       </select>
       <select class="glass-select glass-input filter-bar__select-sm" :value="filters.priority" @change="setFilter('priority', $event.target.value)">
         <option value="">全部优先级</option>

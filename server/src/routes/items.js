@@ -19,6 +19,7 @@ itemsRouter.get('/items', (req, res) => {
     line,
     topic_id,
     item_type,
+    form,
     parent_item_id,
     q,
     sort = 'time',
@@ -35,6 +36,11 @@ itemsRouter.get('/items', (req, res) => {
   if (isValidLine(line)) { where.push('i.line = @line'); params.line = line; }
   if (topic_id) { where.push('i.topic_id = @topic_id'); params.topic_id = Number(topic_id); }
   if (isValidItemType(item_type)) { where.push('i.item_type = @item_type'); params.item_type = item_type; }
+  // v2.1 形态筛选（MECE 四形态）：link/note 拆分 material；idea/bundle 兼容旧 tags 打标的数据
+  if (form === 'link') where.push("i.item_type = 'material' AND i.source_url IS NOT NULL");
+  if (form === 'note') where.push("i.item_type = 'material' AND i.source_url IS NULL");
+  if (form === 'idea') where.push("(i.item_type = 'idea' OR i.tags LIKE '%\"选题\"%')");
+  if (form === 'bundle') where.push("(i.item_type = 'bundle' OR i.tags LIKE '%\"发布包\"%')");
   if (parent_item_id === 'none') { where.push('i.parent_item_id IS NULL'); }
   else if (parent_item_id) { where.push('i.parent_item_id = @parent'); params.parent = parent_item_id; }
   if (SOURCE_PLATFORMS.includes(platform)) { where.push('i.source_platform = @platform'); params.platform = platform; }
@@ -62,9 +68,16 @@ itemsRouter.get('/items', (req, res) => {
   const rows = db
     .prepare(
       `SELECT i.*,
-        (SELECT COUNT(*) FROM todos t WHERE t.source_item_id = i.id) AS todo_count,
-        (SELECT COUNT(*) FROM item_relations r WHERE r.item_id = i.id) AS related_count
-       FROM items i ${whereSql} ORDER BY ${orderBy} LIMIT @limit OFFSET @offset`
+        t.name AS topic_name,
+        (SELECT COUNT(*) FROM todos td WHERE td.source_item_id = i.id) AS todo_count,
+        (SELECT COUNT(*) FROM todos td WHERE td.source_item_id = i.id AND td.status = 'done') AS todo_done_count,
+        (SELECT COUNT(*) FROM item_relations r WHERE r.item_id = i.id) AS related_count,
+        (SELECT td.id FROM todos td WHERE td.source_item_id = i.id AND td.status IN ('pending','in_progress')
+           ORDER BY CASE td.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, td.created_at LIMIT 1) AS next_todo_id,
+        (SELECT td.title FROM todos td WHERE td.source_item_id = i.id AND td.status IN ('pending','in_progress')
+           ORDER BY CASE td.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, td.created_at LIMIT 1) AS next_todo_title
+       FROM items i LEFT JOIN topics t ON t.id = i.topic_id
+       ${whereSql} ORDER BY ${orderBy} LIMIT @limit OFFSET @offset`
     )
     .all({ ...params, limit: pageSize, offset: (pageNum - 1) * pageSize });
 
@@ -81,6 +94,10 @@ itemsRouter.get('/items/:id', (req, res) => {
   const row = db.prepare('SELECT * FROM items WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: '信息不存在' });
   const todos = db.prepare('SELECT * FROM todos WHERE source_item_id = ?').all(req.params.id).map(rowToTodo);
+  const assets = db
+    .prepare('SELECT * FROM assets WHERE item_id = ? ORDER BY created_at DESC, id DESC')
+    .all(req.params.id)
+    .map((a) => ({ ...a, metadata: JSON.parse(a.metadata || '{}') }));
   const relatedRows = db
     .prepare(
       `SELECT i.id, i.title, i.primary_category, i.tags, r.relation_type
@@ -89,7 +106,7 @@ itemsRouter.get('/items/:id', (req, res) => {
     )
     .all(req.params.id)
     .map((r) => ({ ...r, tags: JSON.parse(r.tags || '[]') }));
-  res.json({ ...rowToItem(row), todos, related_items: relatedRows });
+  res.json({ ...rowToItem(row), todos, assets, related_items: relatedRows });
 });
 
 // ---- 编辑（标题/分类/类型/标签/优先级/摘要）----

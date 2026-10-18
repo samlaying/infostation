@@ -1,17 +1,34 @@
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { processInput } from '../api';
-import { CATEGORY_MAP, PRIORITY_MAP, LINE_MAP } from '../constants';
+import { PRIORITY_MAP, LINE_MAP } from '../constants';
+import { useTopicsStore } from '../stores/topics';
 import { toast, toastError } from '../stores/toast';
 import SegmentTabs from './SegmentTabs.vue';
 
 const emit = defineEmits(['processed']);
 
 const content = ref('');
-const category = ref('');
+const topicId = ref('');   // '' = Agent 自动识别归属主题
 const priority = ref('');
 const line = ref('trial'); // 默认 TODO 线
 const processing = ref(false);
+const inputEl = ref(null);
+
+// Agent 技能开关：点亮后随录入下发，本地 Agent 据此启动浏览器截图 / 生图
+const SKILLS = [
+  { key: 'screenshot', label: '📸 自动网页截图', hint: 'URL 输入时，让本地 Agent 用浏览器抓首屏/配图' },
+  { key: 'ai_image', label: '🎨 AI 生成配图', hint: '入库后让 Agent 生成封面/配图并存入资产' },
+];
+const skills = ref(new Set());
+function toggleSkill(key) {
+  const next = new Set(skills.value);
+  next.has(key) ? next.delete(key) : next.add(key);
+  skills.value = next;
+}
+
+const topicsStore = useTopicsStore();
+onMounted(() => topicsStore.load());
 
 const charCount = computed(() => content.value.length);
 const isLikelyUrl = computed(() => /^https?:\/\/\S+$/i.test(content.value.trim()));
@@ -36,13 +53,15 @@ async function submit() {
     const res = await processInput({
       content: content.value.trim(),
       source_type: isLikelyUrl.value ? 'url' : 'text',
-      preferred_category: category.value || undefined,
       preferred_priority: priority.value || undefined,
       line: line.value,
+      topic_id: topicId.value || undefined,
+      skills: [...skills.value],
     });
     const n = res.extracted_todos?.length || 0;
     const noun = line.value === 'media' ? '条内容工序' : '条 TODO';
-    toast(`已入库「${res.processed_item.title.slice(0, 20)}」${n ? `，提取 ${n} ${noun}` : ''}`, 'success');
+    const skillNote = skills.value.size ? `，已点亮技能：${[...skills.value].map((k) => SKILLS.find((s) => s.key === k).label.match(/\S+$/)[0]).join(' + ')}` : '';
+    toast(`已入库「${res.processed_item.title.slice(0, 20)}」${n ? `，提取 ${n} ${noun}` : ''}${skillNote}`, 'success');
     content.value = '';
     emit('processed', res);
   } catch (e) {
@@ -55,6 +74,14 @@ async function submit() {
     processing.value = false;
   }
 }
+
+// 暴露给工作台 Agent 建议：「记一条 XX 主题」→ 聚焦输入框并预选主题
+function focusWithTopic(topicIdToSelect = null, lineToSelect = null) {
+  if (topicIdToSelect != null) topicId.value = String(topicIdToSelect);
+  if (lineToSelect) line.value = lineToSelect;
+  inputEl.value?.focus();
+}
+defineExpose({ focusWithTopic });
 </script>
 
 <template>
@@ -72,6 +99,7 @@ async function submit() {
 
     <div class="quick-input__inputwrap">
       <textarea
+        ref="inputEl"
         v-model="content"
         class="glass-input quick-input__textarea"
         placeholder="粘贴 URL、复制一段文字，或随手记一个想法…"
@@ -91,14 +119,24 @@ async function submit() {
 
     <div class="quick-input__toolbar">
       <div class="quick-input__selects">
-        <select v-model="category" class="glass-select glass-input quick-input__select">
-          <option value="">Agent 自动分类</option>
-          <option v-for="(c, key) in CATEGORY_MAP" :key="key" :value="key">{{ c.icon }} {{ c.label }}</option>
+        <select v-model="topicId" class="glass-select glass-input quick-input__select">
+          <option value="">📁 归入主题：自动识别</option>
+          <option v-for="t in topicsStore.active" :key="t.id" :value="String(t.id)">{{ t.icon }} {{ t.name }}</option>
         </select>
         <select v-model="priority" class="glass-select glass-input quick-input__select">
           <option value="">Agent 评估优先级</option>
           <option v-for="(p, key) in PRIORITY_MAP" :key="key" :value="key">{{ p.label }}优先级</option>
         </select>
+        <button
+          v-for="s in SKILLS"
+          :key="s.key"
+          class="quick-input__skill"
+          :class="{ 'is-on': skills.has(s.key) }"
+          :title="s.hint"
+          @click="toggleSkill(s.key)"
+        >
+          {{ s.label }}
+        </button>
         <span v-if="charCount" class="timestamp">{{ charCount }} 字</span>
       </div>
 
@@ -200,6 +238,25 @@ async function submit() {
   padding-top: 9px;
   padding-bottom: 9px;
   font: var(--font-secondary);
+}
+
+/* ===== Agent 技能胶囊开关：点亮后泛主题青光 ===== */
+.quick-input__skill {
+  font: var(--font-caption);
+  color: var(--text-secondary);
+  background: var(--glass-bg);
+  border: 1px dashed var(--glass-border-hover);
+  padding: 8px 14px;
+  border-radius: var(--radius-full);
+  transition: all var(--transition-fast);
+}
+.quick-input__skill:hover { color: var(--text-primary); border-color: var(--accent-cyan); }
+.quick-input__skill.is-on {
+  color: var(--accent-cyan);
+  border-style: solid;
+  border-color: var(--accent-cyan);
+  background: rgba(6, 182, 212, 0.1);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.25);
 }
 
 @media (max-width: 768px) {
