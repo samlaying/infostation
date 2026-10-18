@@ -92,6 +92,16 @@ function addPoint() {
   edit.points.push('');
 }
 
+// 要点输入框自动增高（v-auto-grow）：内容或外部更新都随文字行数生长
+const vAutoGrow = {
+  mounted: autoGrow,
+  updated: autoGrow,
+};
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
+}
+
 const activeJob = computed(() => jobs.value.find((j) => ['pending', 'running', 'waiting_local'].includes(j.status)));
 const STEP_ICON = { done: '✓', running: '◐', failed: '✗', pending: '○' };
 
@@ -222,12 +232,14 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
         <h3>💡 关键要点 <span class="inspector__edit-hint">点击直接编辑</span></h3>
         <div class="inspector__points">
           <div v-for="(p, i) in edit.points" :key="i" class="inspector__point-row">
-            <input
+            <textarea
+              v-auto-grow
               :value="p"
+              rows="1"
               class="inspector__point-input"
               placeholder="写一条要点…"
               @input="updatePoint(i, $event.target.value)"
-              @keydown.enter="$event.target.blur()"
+              @keydown.enter.prevent="$event.target.blur()"
             />
             <button class="inspector__point-del" title="删除这条要点" @click="removePoint(i)">✕</button>
           </div>
@@ -347,20 +359,23 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
 .inspector__savehint.is-saved { color: var(--accent-green); }
 .inspector__edit-hint { font: var(--font-micro); color: var(--text-muted); text-transform: none; letter-spacing: 0; }
 
-/* 要点行编辑 */
-.inspector__points { display: flex; flex-direction: column; gap: var(--space-3); }
-.inspector__point-row { display: flex; align-items: center; gap: var(--space-3); }
+/* 要点行编辑（textarea 自动增高，长要点换行不截断） */
+.inspector__points { display: flex; flex-direction: column; gap: var(--space-4); }
+.inspector__point-row { display: flex; align-items: flex-start; gap: var(--space-3); }
 .inspector__point-input {
   flex: 1;
   min-width: 0;
   font: var(--font-secondary);
   color: var(--text-primary);
-  line-height: 1.6;
+  line-height: 1.7;
   background: var(--glass-bg-faint);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  padding: var(--space-3) var(--space-5);
+  padding: var(--space-4) var(--space-5);
   outline: none;
+  resize: none;
+  overflow: hidden;
+  overflow-wrap: break-word;
   transition: border-color var(--transition-fast);
 }
 .inspector__point-input:hover { border-color: var(--glass-border); }
@@ -369,7 +384,7 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
 .inspector__point-del {
   color: var(--text-muted);
   font-size: 12px;
-  padding: 4px 6px;
+  padding: var(--space-3) 6px;
   border-radius: var(--radius-xs);
   opacity: 0;
   transition: all var(--transition-fast);
