@@ -1,10 +1,12 @@
 <script setup>
-// ===== 卡片 Inspector（信息库右侧详情抽屉）· v2.1 =====
+// ===== 卡片 Inspector（信息库右侧详情抽屉）· v2.1/v2.2 =====
 // 取代信息库右侧的统计侧栏（分类分布/标签云归数据看板管，MECE）。
-// 职责：深读选中卡片 —— 正文、Agent 截图/生图资产、名下 TODO 直接打勾、关联跳转。
-import { computed } from 'vue';
+// 职责：深读选中卡片 —— 正文、Agent 截图/生图资产、名下 TODO 直接打勾、关联跳转、
+// v2.2 预处理任务进度（技能步骤 ✓/○/✗ + 重跑）。
+import { computed, ref, watch } from 'vue';
 import { useTodosStore } from '../stores/todos';
 import { PLATFORM_MAP, PRIORITY_MAP, FORM_MAP, itemForm, timeAgo, fmtDate } from '../constants';
+import { fetchJobs, reprocessItem } from '../api';
 import { toastError, toastSuccess } from '../stores/toast';
 
 const props = defineProps({
@@ -14,6 +16,38 @@ const emit = defineEmits(['close', 'edit', 'open-related']);
 
 const todosStore = useTodosStore();
 const form = computed(() => itemForm(props.item));
+const jobs = ref([]);
+const reprunning = ref(false);
+
+watch(
+  () => props.item?.id,
+  async (id) => {
+    jobs.value = [];
+    if (!id) return;
+    try {
+      const res = await fetchJobs({ item_id: id });
+      jobs.value = res.jobs || [];
+    } catch { /* 无 job 或网络抖动不阻塞阅读 */ }
+  },
+  { immediate: true }
+);
+
+const activeJob = computed(() => jobs.value.find((j) => ['pending', 'running', 'waiting_local'].includes(j.status)));
+const STEP_ICON = { done: '✓', running: '◐', failed: '✗', pending: '○' };
+
+async function rerun() {
+  reprunning.value = true;
+  try {
+    await reprocessItem(props.item.id);
+    toastSuccess('预处理已重新启动 🤖');
+    const res = await fetchJobs({ item_id: props.item.id });
+    jobs.value = res.jobs || [];
+  } catch (e) {
+    toastError(e.message);
+  } finally {
+    reprunning.value = false;
+  }
+}
 
 async function toggleTodo(t) {
   try {
@@ -58,6 +92,32 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
       </div>
 
       <p class="inspector__summary">{{ item.summary }}</p>
+
+      <!-- v2.2 预处理任务进度：技能步骤逐项点亮 + 失败重跑 -->
+      <section v-if="jobs.length" class="inspector__section">
+        <h3>
+          🤖 Agent 预处理
+          <span v-if="activeJob" class="inspector__job-live">
+            <span class="inspector__pulse" />{{ activeJob.current_step || '进行中…' }}
+          </span>
+          <span v-else-if="jobs[0].status === 'failed'" class="timestamp">部分失败</span>
+        </h3>
+        <div class="inspector__job">
+          <div v-for="(l, i) in jobs[0].logs" :key="i" class="inspector__job-step" :class="`is-${l.status}`">
+            <span class="inspector__job-icon">{{ STEP_ICON[l.status] || '○' }}</span>
+            <span class="inspector__job-name">{{ l.skill }}</span>
+            <span class="timestamp">{{ l.error ? l.error.slice(0, 40) : (l.result?.asset_url ? '已存截图' : '') }}</span>
+          </div>
+          <div v-for="s in jobs[0].skills_plan.slice(jobs[0].logs.length)" :key="s.skill" class="inspector__job-step is-pending">
+            <span class="inspector__job-icon">○</span>
+            <span class="inspector__job-name">{{ s.skill }}</span>
+            <span class="timestamp">{{ s.runtime === 'local' ? '待本地 Agent' : '排队中' }}</span>
+          </div>
+          <button v-if="!activeJob" class="btn btn--glass btn--sm inspector__rerun" :disabled="reprunning" @click="rerun">
+            {{ reprunning ? '启动中…' : '↻ 重新预处理' }}
+          </button>
+        </div>
+      </section>
 
       <!-- Agent 视觉资产：截图 / 生图 / 图床 -->
       <section v-if="item.assets?.length" class="inspector__section">
@@ -183,7 +243,48 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
   text-transform: uppercase;
   letter-spacing: 0.4px;
   margin-bottom: var(--space-4);
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
 }
+
+/* v2.2 任务进度 */
+.inspector__job { display: flex; flex-direction: column; gap: var(--space-3); }
+.inspector__job-live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  font: var(--font-micro);
+  color: var(--accent-purple);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.inspector__pulse {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent-purple);
+  box-shadow: 0 0 8px rgba(147, 51, 234, 0.6);
+  animation: inspector-pulse 1.4s ease-in-out infinite;
+}
+@keyframes inspector-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.inspector__job-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font: var(--font-micro);
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-4);
+  background: var(--glass-bg-faint);
+  border-radius: var(--radius-xs);
+}
+.inspector__job-step.is-done { color: var(--accent-green); }
+.inspector__job-step.is-running { color: var(--accent-purple); }
+.inspector__job-step.is-failed { color: var(--accent-red); }
+.inspector__job-icon { width: 14px; text-align: center; }
+.inspector__job-name { flex: 1; }
+.inspector__rerun { align-self: flex-start; margin-top: var(--space-2); }
 
 .inspector__assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-4); }
 .inspector__asset {

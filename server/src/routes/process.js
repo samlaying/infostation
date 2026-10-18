@@ -9,6 +9,7 @@ import { extractUrl } from '../services/extractor.js';
 import { findDuplicate } from '../services/dedup.js';
 import { linkByTagOverlap } from '../services/relations.js';
 import { broadcast } from '../services/events.js';
+import { runPipeline } from '../orchestrator/worker.js';
 import { detectPlatform, isUrl, isValidCategory, isValidPriority, isValidLine } from '../constants.js';
 
 export const processRouter = Router();
@@ -235,6 +236,9 @@ processRouter.post('/process', async (req, res, next) => {
     if (todosToInsert.length) broadcast('todos', 'create');
     if (topicId) broadcast('topics', 'create');
 
+    // v2.2：异步启动预处理流水线（截图/调研/clone 由后台执行，不阻塞响应）
+    const jobId = runPipeline(itemId, 'process');
+
     const item = rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(itemId));
     const todos = db
       .prepare('SELECT * FROM todos WHERE source_item_id = ?')
@@ -246,6 +250,7 @@ processRouter.post('/process', async (req, res, next) => {
       extracted_todos: todos,
       agent_mode: result.agent_mode,
       llm_configured: llmConfigured(),
+      preexec_job_id: jobId || null,
     });
   } catch (err) {
     next(err);

@@ -32,8 +32,8 @@ onMounted(async () => {
   await Promise.all([itemsStore.load(1), topicsStore.load(true)]);
 });
 
-// SSE：卡片/主题变更后自动刷新当前页与主题计数
-useLiveReload(() => { itemsStore.refresh(); topicsStore.refresh(); }, ['items', 'topics']);
+// SSE：卡片/主题/任务/资产变更后自动刷新（jobs→呼吸灯状态、assets→图数徽章）
+useLiveReload(() => { itemsStore.refresh(); topicsStore.refresh(); }, ['items', 'topics', 'jobs', 'assets']);
 
 watch(
   () => itemsStore.filters,

@@ -37,8 +37,8 @@ async function loadAll() {
 
 onMounted(loadAll);
 
-// SSE：任何端落库（卡片/TODO/主题）后，工作台自动刷新
-useLiveReload(loadAll, ['items', 'todos', 'topics']);
+// SSE：任何端落库（卡片/TODO/主题/任务）后，工作台自动刷新
+useLiveReload(loadAll, ['items', 'todos', 'topics', 'jobs']);
 
 function onProcessed() {
   loadAll();
@@ -184,7 +184,13 @@ async function openDetailById(id) {
           <button v-for="it in recentItems" :key="it.id" class="dashboard__recent-item" @click="openDetail(it)">
             <span v-if="it.topic_name" class="dashboard__recent-topic">{{ it.topic_name }}</span>
             <span class="dashboard__recent-title">{{ it.title }}</span>
+            <span
+              v-if="['pending', 'running', 'waiting_local'].includes(it.job_status)"
+              class="dashboard__recent-preexec"
+              :title="it.job_step || 'Agent 预处理中'"
+            >🔄</span>
             <span v-if="it.todo_count" class="dashboard__recent-badge">✅ {{ it.todo_count }}</span>
+            <span v-if="it.asset_count" class="dashboard__recent-badge dashboard__recent-badge--asset">🖼 {{ it.asset_count }}</span>
             <span
               class="line-dot"
               :class="`line-dot--${it.line || 'trial'}`"
@@ -382,6 +388,20 @@ async function openDetailById(id) {
   border: 1px solid rgba(5, 150, 105, 0.25);
   padding: 2px 8px;
   border-radius: var(--radius-full);
+}
+.dashboard__recent-badge--asset {
+  color: var(--accent-purple);
+  background: rgba(147, 51, 234, 0.07);
+  border-color: rgba(147, 51, 234, 0.25);
+}
+.dashboard__recent-preexec {
+  font-size: 12px;
+  animation: dashboard-preexec-spin 1.6s linear infinite;
+  display: inline-block;
+}
+@keyframes dashboard-preexec-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* ===== 业务线色点（蓝=代试 / 橙=内容） ===== */

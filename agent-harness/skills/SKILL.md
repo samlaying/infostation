@@ -153,6 +153,21 @@ cli-anything-infostation posts update 1 --status published --url https://xhs.exa
 | `show` | 当前连接配置（token 掩码显示） |
 | `save --url --token` | 保存到 `~/.config/infostation-cli/config.json` |
 
+### worker — 本地预处理 Worker（v2.2）
+
+服务器在卡片入库后会生成预处理任务（`agent_jobs`：GitHub 检查+Clone / ego 浏览器截图 / Tavily 调研），
+其中重型技能需要本机的浏览器登录态与 gh，由本命令认领执行、产物回传服务器落库（截图入 `assets`）。
+
+| Command | Description |
+|---------|-------------|
+| `worker --once` | 认领并执行一个任务即退出（适合挂在 Agent 会话里） |
+| `worker --loop [--interval 8]` | 常驻轮询（适合 `launchd`/tmux 挂后台） |
+| `worker --caps browser,gh` | 强制声明能力（默认自动探测 PATH 里的 ego-browser/gh） |
+
+- 能力来源：`ego-browser`（真实登录态浏览器截图）、`gh`（repo 元信息 + README 安装命令 + Clone 到 `~/Workspace/trials/`，可用 `INFOSTATION_TRIALS_DIR` 改目录）
+- 网络注意：`gh` 走 shell 环境代理，按项目启动前 `export HTTPS_PROXY=...` 即可；ego 浏览器走自身代理设置
+- 前端会实时显示任务进度（呼吸灯），完成后卡片自动挂上截图/Clone 路径/调研简报徽章
+
 ## 典型 Agent 工作流
 
 ```bash

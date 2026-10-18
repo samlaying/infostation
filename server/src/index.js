@@ -18,6 +18,7 @@ import { agentRouter } from './routes/agent.js';
 import { topicsRouter } from './routes/topics.js';
 import { assetsRouter, postsRouter } from './routes/assets.js';
 import { eventsRouter } from './routes/events.js';
+import { agentJobsRouter, UPLOAD_DIR } from './routes/agent-jobs.js';
 import { requireToken } from './middleware/auth.js';
 import { llmConfigured } from './services/agent.js';
 
@@ -44,7 +45,12 @@ api.use(weeklyRouter);
 api.use(settingsRouter);
 api.use(backupRouter);
 api.use(eventsRouter); // SSE 变更推送（GET /api/v1/events）
+api.use(agentJobsRouter); // v2.2 预处理任务：查询/本地 worker 认领与回传/重跑
 app.use('/api/v1', api);
+
+// v2.2：预处理产物（截图等）静态服务。挂在鉴权之外：<img> 无法带 header；
+// 文件名为随机 UUID 不可枚举，与前端同级别暴露面（上 HTTPS 后可收紧）
+app.use('/uploads', express.static(UPLOAD_DIR, { maxAge: '7d' }));
 
 // ===== 生产模式：托管前端构建产物（client/dist），SPA 回退到 index.html =====
 const STATIC_DIR = process.env.STATIC_DIR || path.join(__dirname, '..', '..', 'client', 'dist');

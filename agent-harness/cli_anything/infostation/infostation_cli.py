@@ -15,8 +15,15 @@
 """
 
 import argparse
+import base64
 import json
+import os
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any
@@ -247,6 +254,144 @@ def cmd_backup(args: SimpleNamespace, cfg: Cfg) -> Any:
         return client.delete("/api/v1/data", cfg)
 
 
+# ---------- v2.2：本地预处理 Worker（重型技能在本机执行）----------
+# 服务器编排（agent_jobs 排队）+ 本机执行（ego 浏览器截图 / gh 检查+Clone）。
+# 用法：cli-anything-infostation worker --loop            # 常驻轮询
+#       cli-anything-infostation worker --once            # 认领并执行一个任务即退出
+
+def _sh(cmd: list[str], timeout: int = 120, retries: int = 1) -> subprocess.CompletedProcess:
+    """跑本机命令，统一拿 stdout（strip），失败重试一次后仍失败则抛 RuntimeError。"""
+    last_err = ""
+    for attempt in range(retries + 1):
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if p.returncode == 0:
+                return p
+            last_err = f"{cmd[0]} 退出码 {p.returncode}: {(p.stderr or p.stdout)[:200]}"
+        except FileNotFoundError:
+            raise RuntimeError(f"命令不存在: {cmd[0]}")
+        if attempt < retries:
+            time.sleep(2)
+    raise RuntimeError(last_err)
+
+
+def _exec_browser_screenshot(step: dict) -> dict:
+    """ego-browser 截图：用真实登录态浏览器打开 URL，落 PNG 并返回本机路径。
+
+    goto 超时不致命（代理下 github 等站点常到不了 load 态）——部分加载也截图留档。
+    """
+    url = step["params"]["url"]
+    out = os.path.join(tempfile.mkdtemp(prefix="infostation-shot-"), "page.png")
+    script = (
+        "const task = await taskSpace('infostation-preexec');\n"
+        "const page = task.page('p1');\n"
+        f"try {{ await page.goto({json.dumps(url)}); }} catch (e) {{ console.log(JSON.stringify({{nav_warn: String(e).slice(0, 120)}})); }}\n"
+        "try { await page.waitForLoadState('networkidle'); } catch {}\n"
+        "await page.waitForTimeout(2500);\n"
+        f"const path = await page.screenshot({{ path: {json.dumps(out)} }});\n"
+        "console.log(JSON.stringify({ ok: true, path, title: await page.title() }));"
+    )
+    p = _sh(["ego-browser", "nodejs", "-e", script], timeout=180)
+    result = None
+    for line in p.stdout.splitlines():
+        if '"ok": true' in line:
+            result = json.loads(line)
+    if not result:
+        raise RuntimeError(f"ego-browser 输出未含结果: {p.stdout[-200:]}")
+    result.setdefault("title", "")
+    return result
+
+
+def _exec_gh_inspect(step: dict) -> dict:
+    """gh 检查仓库：元信息 + README 安装命令提取 + 可选 Clone 到本地试验目录。"""
+    repo = step["params"]["repo"]
+    result: dict = {"repo": repo}
+    p = _sh(["gh", "repo", "view", repo, "--json",
+             "name,description,stargazerCount,primaryLanguage,pushedAt,licenseInfo"])
+    meta = json.loads(p.stdout)
+    result["repo_meta"] = {
+        "stars": meta.get("stargazerCount"),
+        "language": (meta.get("primaryLanguage") or {}).get("name"),
+        "pushed_at": meta.get("pushedAt"),
+    }
+    # README 提取安装命令（pip/npm/make/uv 前几条）
+    try:
+        p = _sh(["gh", "api", f"repos/{repo}/readme"], timeout=60)
+        readme = base64.b64decode(json.loads(p.stdout)["content"]).decode("utf-8", "replace")
+        hints = re.findall(r"^\s*((?:pip install|npm install|pnpm install|yarn|make|uv sync|uv pip install)[^\n`]+)", readme, re.M)
+        result["install_hints"] = hints[:4]
+    except Exception:
+        result["install_hints"] = []
+    # Clone（INFOSTATION_TRIALS_DIR 未配置则只检查不克隆）
+    trials_dir = os.environ.get("INFOSTATION_TRIALS_DIR") or os.path.expanduser("~/Workspace/trials")
+    dest = os.path.join(trials_dir, repo.split("/")[-1])
+    if os.path.exists(dest):
+        result["clone_path"] = dest
+        result["cloned"] = "exists"
+    else:
+        os.makedirs(trials_dir, exist_ok=True)
+        _sh(["gh", "repo", "clone", repo, dest, "--", "--depth", "1"], timeout=300)
+        result["clone_path"] = dest
+        result["cloned"] = "fresh"
+    return result
+
+
+LOCAL_SKILLS = {
+    "browser_screenshot": _exec_browser_screenshot,
+    "gh_inspect": _exec_gh_inspect,
+}
+
+
+def _detect_caps() -> list[str]:
+    caps = []
+    for cmd, cap in (("ego-browser", "browser"), ("gh", "gh")):
+        if shutil.which(cmd):
+            caps.append(cap)
+    return caps
+
+
+def _b64_file(path: str) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
+
+
+def cmd_worker(args: SimpleNamespace, cfg: Cfg) -> dict | None:
+    caps = args.caps.split(",") if args.caps else _detect_caps()
+    if not caps:
+        return {"error": "本机没有任何可用能力（ego-browser / gh 都不在 PATH）"}
+    out(f"{{\"worker\": \"ready\", \"caps\": {json.dumps(caps)}, \"mode\": \"{'loop' if args.loop else 'once'}\"}}")
+
+    while True:
+        claim = client.get("/api/v1/agent-jobs/claim", cfg, caps=",".join(caps)) or {}
+        job = claim.get("job")
+        if not job:
+            if not args.loop:
+                return {"claimed": 0}
+            time.sleep(args.interval)
+            continue
+        step, idx = claim["step"], claim["step_index"]
+        out({"claimed": job["id"], "skill": step["skill"], "item": job["item_id"]})
+        body: dict = {"ok": True}
+        try:
+            result = LOCAL_SKILLS[step["skill"]](step)
+            body["result"] = {k: v for k, v in result.items() if k != "path"}
+            if step["skill"] == "browser_screenshot" and result.get("path"):
+                body["upload"] = {
+                    "filename": "page.png",
+                    "mime": "image/png",
+                    "content_b64": _b64_file(result["path"]),
+                    "local_path": result["path"],
+                }
+        except Exception as e:  # noqa: BLE001 — worker 单步失败不退出循环
+            body = {"ok": False, "error": str(e)[:300]}
+        done = client.post(f"/api/v1/agent-jobs/{job['id']}/steps/{idx}/complete", cfg, body)
+        out({"job": job["id"], "skill": step["skill"],
+             "status": done.get("job", {}).get("status"), "asset": bool(done.get("asset"))})
+        if not args.loop:
+            return {"claimed": 1}
+
+
+
 # ---------- argparse 组装 ----------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -436,6 +581,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = spp.add_parser("goals", help="保存目标领域偏好（逗号分隔）")
     s.add_argument("goals", help="如：career,media,sidehustle")
 
+    # worker（v2.2 本地预处理）
+    sp = sub.add_parser("worker", help="本地预处理 Worker（认领 ego 浏览器截图 / gh 检查任务）")
+    sp.add_argument("--once", action="store_true", help="认领并执行一个任务即退出（默认行为，与 --loop 互斥）")
+    sp.add_argument("--loop", action="store_true", help="常驻轮询模式（默认 8s 间隔）")
+    sp.add_argument("--interval", type=float, default=8, help="轮询间隔秒数")
+    sp.add_argument("--caps", help="强制声明能力（逗号分隔 browser,gh；默认自动探测 PATH）")
+
     # backup
     sp = sub.add_parser("backup", help="数据管理")
     spp = sp.add_subparsers(dest="backup_cmd", required=True)
@@ -456,6 +608,7 @@ HANDLERS = {
     "items": cmd_items, "todos": cmd_todos, "stats": cmd_stats,
     "weekly": cmd_weekly, "settings": cmd_settings, "backup": cmd_backup,
     "topics": cmd_topics, "assets": cmd_assets, "posts": cmd_posts,
+    "worker": cmd_worker,
 }
 
 

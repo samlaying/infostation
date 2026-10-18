@@ -13,8 +13,8 @@ export function subscribe(fn) {
 
 /**
  * 落库后广播变更。
- * @param resource items|todos|topics|assets|posts|all（all = 导入/清库等全局变更）
- * @param action  create|update|delete|import|clear
+ * @param resource items|todos|topics|assets|posts|jobs|all（all = 导入/清库等全局变更）
+ * @param action  create|update|delete|import|clear|completed
  * @param id      变更对象 id（可空）
  */
 export function broadcast(resource, action, id = null) {

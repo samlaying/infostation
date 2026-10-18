@@ -72,6 +72,9 @@ itemsRouter.get('/items', (req, res) => {
         (SELECT COUNT(*) FROM todos td WHERE td.source_item_id = i.id) AS todo_count,
         (SELECT COUNT(*) FROM todos td WHERE td.source_item_id = i.id AND td.status = 'done') AS todo_done_count,
         (SELECT COUNT(*) FROM item_relations r WHERE r.item_id = i.id) AS related_count,
+        (SELECT COUNT(*) FROM assets a WHERE a.item_id = i.id) AS asset_count,
+        (SELECT j.status FROM agent_jobs j WHERE j.item_id = i.id ORDER BY j.id DESC LIMIT 1) AS job_status,
+        (SELECT j.current_step FROM agent_jobs j WHERE j.item_id = i.id ORDER BY j.id DESC LIMIT 1) AS job_step,
         (SELECT td.id FROM todos td WHERE td.source_item_id = i.id AND td.status IN ('pending','in_progress')
            ORDER BY CASE td.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, td.created_at LIMIT 1) AS next_todo_id,
         (SELECT td.title FROM todos td WHERE td.source_item_id = i.id AND td.status IN ('pending','in_progress')
