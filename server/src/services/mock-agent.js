@@ -141,6 +141,9 @@ function extractTodosFromText(text, category, line = 'trial') {
       description: clamp(c.source, 100),
       category,
       priority: 'medium',
+      // v2.3：mock 模式不派工，新字段给默认值保持结构一致
+      assigned_agent: null,
+      acceptance: '',
     });
   }
   return todos;

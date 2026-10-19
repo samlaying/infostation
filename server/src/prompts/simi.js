@@ -12,8 +12,11 @@ export function buildSystemPrompt({ userGoals = [], existingTags = [], line = 't
     : '';
 
   // v2.0：主题归属 —— Agent 从既有主题中选，或提出新主题名
+  // v2.3：topics 支持 {name, description}（描述首次进提示词，归属判断更准）
   const topicsHint = topics.length
-    ? `\n用户已有主题（归属判断时优先从中选）：${topics.join('、')}`
+    ? `\n用户已有主题（归属判断时优先从中选）：${topics
+        .map((t) => (typeof t === 'string' ? t : `${t.name}${t.description ? `（${String(t.description).slice(0, 40)}）` : ''}`))
+        .join('、')}`
     : '';
 
   const todoStrategy = line === 'media'

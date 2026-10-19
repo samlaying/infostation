@@ -8,6 +8,7 @@ import {
   CATEGORIES,
   CONTENT_TYPES,
   PRIORITIES,
+  AGENT_EXECUTORS,
 } from '../constants.js';
 
 const CFG = () => ({
@@ -22,7 +23,7 @@ export function llmConfigured() {
 }
 
 /** 剥离 markdown 围栏、截取 JSON 主体 */
-function extractJson(text) {
+export function extractJson(text) {
   if (!text) return null;
   let t = text.trim();
   const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -37,12 +38,13 @@ function extractJson(text) {
   }
 }
 
-async function callLlm(system, user, useJsonFormat = true) {
+// v2.3：导出给 planner-llm 复用；modelOverride 供拆解 pass 指定更强模型
+export async function callLlm(system, user, useJsonFormat = true, modelOverride) {
   const { baseUrl, apiKey, model, timeout } = CFG();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const body = {
-    model,
+    model: modelOverride || model,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
@@ -87,6 +89,9 @@ function normalizeAgentResult(parsed, rawInput, opts, mode) {
           description: String(t.description || '').slice(0, 200),
           priority: pickEnum(t.priority, PRIORITIES, 'medium'),
           suggested_days: Number.isFinite(Number(t.suggested_days)) ? Number(t.suggested_days) : null,
+          // v2.3：一次 pass 兜底的 todos 不带承接人（专职拆解 pass 失败时的 fallback）
+          assigned_agent: AGENT_EXECUTORS.includes(t.assigned_agent) && t.assigned_agent !== 'user' ? t.assigned_agent : null,
+          acceptance: String(t.acceptance || '').slice(0, 120),
         }))
     : [];
 
