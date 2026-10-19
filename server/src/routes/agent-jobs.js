@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { db, rowToAsset } from '../db.js';
-import { claimLocalStep, completeStep, listJobs, runPipeline } from '../orchestrator/worker.js';
+import { claimLocalStep, completeStep, listJobs, runPipeline, approveStep } from '../orchestrator/worker.js';
 import { broadcast } from '../services/events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,6 +40,20 @@ agentJobsRouter.post('/agent-jobs/reprocess/:itemId', (req, res) => {
   const id = runPipeline(req.params.itemId, 'manual');
   if (!id) return res.status(400).json({ error: '没有可执行的预处理计划（或已有任务在进行中）' });
   res.status(201).json({ ok: true, job_id: id });
+});
+
+// ---- v2.3 确认门：批准 / 跳过 awaiting_user 的任务（网页 Inspector / CLI 双入口）----
+agentJobsRouter.post('/agent-jobs/:id/approve', (req, res) => {
+  const { action = 'approve' } = req.body || {};
+  if (!['approve', 'skip'].includes(action)) {
+    return res.status(400).json({ error: 'action 只能是 approve | skip' });
+  }
+  try {
+    const job = approveStep(Number(req.params.id), action);
+    res.json({ ok: true, job });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 const EXT_MIME = {

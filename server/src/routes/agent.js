@@ -7,6 +7,7 @@ import { llmConfigured } from '../services/agent.js';
 import {
   CATEGORIES, CONTENT_TYPES, PRIORITIES, TODO_STATUSES, SOURCE_PLATFORMS,
   LINES, ITEM_TYPES, ASSET_TYPES, POST_PLATFORMS, POST_STATUSES,
+  AGENT_EXECUTORS, AGENT_JOB_STATUSES,
 } from '../constants.js';
 
 export const agentRouter = Router();
@@ -14,17 +15,19 @@ export const agentRouter = Router();
 agentRouter.get('/agent/capabilities', (req, res) => {
   res.json({
     name: 'InfoStation',
-    version: '0.2.0',
+    version: '0.3.0',
     description:
       'AI 驱动的个人信息处理中枢：录入 → Agent 清洗/分类/TODO 提取 → 知识卡片与行动清单。' +
       '双线设计：trial(TODO线，值得试的东西→行动) / media(自媒体线，话题素材→内容生产)。' +
-      'v2.0 数据模型：topics(主题=目标，一等公民) → items(素材→选题→发布包血缘树) → assets(截图/生图) → posts(多平台帖子与发布回执)',
+      'v2.0 数据模型：topics(主题=目标，一等公民) → items(素材→选题→发布包血缘树) → assets(截图/生图) → posts(多平台帖子与发布回执)。' +
+      'v2.3 智能派工：一句话 → 带承接人(assigned_agent)的步骤链 → search_agent 自动调研 → local/content_agent 卡确认门(awaiting_user) → 批准执行 → 完成后续推下一步',
     auth: process.env.API_TOKEN
       ? { required: true, header: 'Authorization: Bearer <token> 或 X-API-Key: <token>' }
       : { required: false, note: '未配置 API_TOKEN，接口开放（本地开发模式）' },
     agent_engine: {
       mode: llmConfigured() ? 'llm' : 'mock',
       model: llmConfigured() ? process.env.LLM_MODEL : null,
+      planner_model: process.env.LLM_PLANNER_MODEL || null,
     },
     enums: {
       lines: LINES,                     // 产品线：trial(TODO线) | media(自媒体线)；默认 trial
@@ -38,6 +41,8 @@ agentRouter.get('/agent/capabilities', (req, res) => {
       asset_types: ASSET_TYPES,         // v2.0 资产：screenshot | ai_image | upload | video
       post_platforms: POST_PLATFORMS,   // v2.0 帖子平台
       post_statuses: POST_STATUSES,     // v2.0 帖子状态机
+      executors: AGENT_EXECUTORS,       // v2.3 TODO 承接人：user | search_agent(只读自动跑) | local_agent(需确认) | content_agent(需确认)
+      job_statuses: AGENT_JOB_STATUSES, // v2.3 任务状态：pending | running | awaiting_user | waiting_local | completed | failed
     },
     endpoints: [
       {
@@ -96,17 +101,18 @@ agentRouter.get('/agent/capabilities', (req, res) => {
           status: 'enum(todo_statuses)', source_item_id: '按来源卡片过滤',
           line: 'enum(lines) 按产品线过滤：trial(行动项) | media(内容工序)',
           topic_id: 'number 按主题过滤（v2.0）',
+          assigned_agent: 'v2.3 按承接人过滤：user(本人的) | agent(任一Agent) | enum(executors)',
         },
       },
       {
         method: 'POST', path: '/api/v1/todos',
-        summary: '手动创建 TODO',
-        body: { title: 'string 必填', description: 'string', category: 'enum', priority: 'enum', actual_deadline: 'YYYY-MM-DD', source_item_id: '关联卡片', line: 'enum(lines) 可选，缺省继承来源卡片的线，再缺省 trial' },
+        summary: '手动创建 TODO（v2.3 可指定承接人，agent 类就绪即自动派工）',
+        body: { title: 'string 必填', description: 'string', category: 'enum', priority: 'enum', actual_deadline: 'YYYY-MM-DD', source_item_id: '关联卡片', line: 'enum(lines) 可选，缺省继承来源卡片的线，再缺省 trial', assigned_agent: 'enum(executors) 可选', acceptance: 'string 验收标准' },
       },
       {
         method: 'PATCH', path: '/api/v1/todos/:id',
-        summary: '更新 TODO（完成/进行中/归档/编辑/改期/换线）',
-        body: { status: 'enum(todo_statuses)', title: 'string', priority: 'enum', category: 'enum', actual_deadline: 'YYYY-MM-DD 或 null', line: 'enum(lines)' },
+        summary: '更新 TODO（完成/进行中/归档/编辑/改期/换线/换承接人；v2.3 手动置 done 触发放行下一条 agent-TODO + 续推复盘）',
+        body: { status: 'enum(todo_statuses)', title: 'string', priority: 'enum', category: 'enum', actual_deadline: 'YYYY-MM-DD 或 null', line: 'enum(lines)', assigned_agent: 'enum(executors)', step_order: 'number', acceptance: 'string' },
       },
       { method: 'DELETE', path: '/api/v1/todos/:id', summary: '删除 TODO' },
       {
@@ -162,6 +168,31 @@ agentRouter.get('/agent/capabilities', (req, res) => {
         body: { title: 'string', content_body: 'string', asset_ids: 'number[]', platform: 'enum', status: 'enum(post_statuses)', published_url: 'string（发布成功后的线上链接）' },
       },
       { method: 'DELETE', path: '/api/v1/posts/:id', summary: 'v2.0 删除帖子' },
+      {
+        method: 'GET', path: '/api/v1/agent-jobs',
+        summary: 'v2.2/2.3 任务列表（卡片预处理 + TODO 派工），Inspector 进度面板数据源',
+        query: { item_id: '按卡片过滤', status: 'enum(job_statuses)', todo_id: '按源 TODO 过滤（v2.3）', limit: '默认 20' },
+      },
+      {
+        method: 'GET', path: '/api/v1/agent-jobs/claim',
+        summary: '本地 worker 认领下一个可执行 local 步（caps=browser,gh 为 CLI 循环 worker；caps=agent 由 AI Agent 会话认领 agent_task 委派任务）',
+        query: { caps: '逗号分隔能力声明：browser | gh | agent' },
+        returns: '{ job, step, step_index } 或 { job: null }；step.params 含执行指令（agent_task 带 title/description/acceptance）',
+      },
+      {
+        method: 'POST', path: '/api/v1/agent-jobs/:id/steps/:idx/complete',
+        summary: '回传步骤结果（CLI worker / AI Agent 会话执行完成后调用；截图等二进制走 base64 upload）',
+        body: { ok: 'boolean', result: 'object（agent_task 约定 {title, report} 文本报告）', error: 'string', upload: '{ filename, mime, content_b64, local_path } 可选' },
+      },
+      {
+        method: 'POST', path: '/api/v1/agent-jobs/:id/approve',
+        summary: 'v2.3 确认门：对 awaiting_user 的任务做决定（网页 Inspector / CLI jobs approve 双入口）',
+        body: { action: 'approve（放行执行）| skip（跳过该步继续）' },
+      },
+      {
+        method: 'POST', path: '/api/v1/agent-jobs/reprocess/:itemId',
+        summary: '重跑某张卡的预处理（配置好 Tavily key 后补跑调研等场景）',
+      },
       { method: 'GET', path: '/api/v1/stats', summary: '数据看板（总量/趋势7与30天/分类与平台分布/标签TOP10/完成率/目标进度；v2.0 todos 含 trial_count/media_count 分线口径）' },
       { method: 'GET', path: '/api/v1/weekly-report', summary: '本周周报（?refresh=1 重新生成）' },
       { method: 'GET', path: '/api/v1/weekly-reports', summary: '历史周报列表' },
