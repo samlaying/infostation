@@ -199,7 +199,7 @@ if (jobsDdl && /CHECK\s*\(\s*status/i.test(jobsDdl.sql || '')) {
         updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
       );
       INSERT INTO agent_jobs_rebuild (id, item_id, todo_id, status, current_step, skills_plan, logs, error_msg, created_at, updated_at)
-        SELECT id, NULL, NULL, status, current_step, skills_plan, logs, error_msg, created_at, updated_at FROM agent_jobs;
+        SELECT id, item_id, NULL, status, current_step, skills_plan, logs, error_msg, created_at, updated_at FROM agent_jobs;
       DROP TABLE agent_jobs;
       ALTER TABLE agent_jobs_rebuild RENAME TO agent_jobs;
     `);
