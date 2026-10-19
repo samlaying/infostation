@@ -3,14 +3,19 @@
 import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import { db, rowToTodo, rowToItem } from '../db.js';
-import { isValidCategory, isValidPriority, isValidTodoStatus, isValidLine } from '../constants.js';
+import {
+  isValidCategory, isValidPriority, isValidTodoStatus, isValidLine,
+  isValidExecutor,
+} from '../constants.js';
 import { broadcast } from '../services/events.js';
+import { dispatchReadyTodos } from '../orchestrator/worker.js';
+import { replanForItem } from '../services/planner-llm.js';
 
 export const todosRouter = Router();
 
 // ---- 列表（视图筛选：today / goal / all / done）----
 todosRouter.get('/todos', (req, res) => {
-  const { view, category, priority, status, source_item_id, line, topic_id } = req.query;
+  const { view, category, priority, status, source_item_id, line, topic_id, assigned_agent } = req.query;
   const where = [];
   const params = {};
 
@@ -20,6 +25,12 @@ todosRouter.get('/todos', (req, res) => {
   if (isValidLine(line)) { where.push('line = @line'); params.line = line; }
   if (source_item_id) { where.push('source_item_id = @sid'); params.sid = source_item_id; }
   if (topic_id) { where.push('topic_id = @topic_id'); params.topic_id = Number(topic_id); }
+  // v2.3：按承接人过滤——user=本人的（assigned_agent 为空）；agent=任一 Agent
+  if (assigned_agent === 'user') where.push('assigned_agent IS NULL');
+  else if (assigned_agent === 'agent') where.push('assigned_agent IS NOT NULL');
+  else if (isValidExecutor(assigned_agent) && assigned_agent !== 'user') {
+    where.push('assigned_agent = @agent'); params.agent = assigned_agent;
+  }
 
   const today = new Date().toISOString().slice(0, 10);
   if (view === 'today') {
@@ -67,7 +78,10 @@ todosRouter.get('/todos', (req, res) => {
 
 // ---- 手动新建 ----
 todosRouter.post('/todos', (req, res) => {
-  const { title, description = '', category = 'growth', priority = 'medium', actual_deadline, source_item_id, line, topic_id } = req.body || {};
+  const {
+    title, description = '', category = 'growth', priority = 'medium', actual_deadline,
+    source_item_id, line, topic_id, assigned_agent, acceptance = '',
+  } = req.body || {};
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'TODO 标题不能为空' });
   if (source_item_id && !db.prepare('SELECT id FROM items WHERE id = ?').get(source_item_id)) {
     return res.status(400).json({ error: '来源信息不存在' });
@@ -88,8 +102,9 @@ todosRouter.post('/todos', (req, res) => {
     if (src && isValidLine(src.line)) targetLine = src.line;
   }
   db.prepare(`
-    INSERT INTO todos (id, title, description, source_item_id, category, priority, status, actual_deadline, tags, line, topic_id, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '[]', ?, ?, ?)
+    INSERT INTO todos (id, title, description, source_item_id, category, priority, status, actual_deadline, tags, line, topic_id,
+      assigned_agent, acceptance, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, '[]', ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     String(title).trim().slice(0, 40),
@@ -100,9 +115,15 @@ todosRouter.post('/todos', (req, res) => {
     actual_deadline || null,
     targetLine || 'trial',
     topicId,
+    // v2.3：手动 TODO 也可指定承接人（user 映射为 NULL）
+    isValidExecutor(assigned_agent) && assigned_agent !== 'user' ? assigned_agent : null,
+    String(acceptance).slice(0, 120),
+    now,
     now
   );
   broadcast('todos', 'create', id);
+  // v2.3：手动建的 agent-TODO 立即尝试派工（就绪即跑）
+  if (source_item_id) dispatchReadyTodos(source_item_id);
   res.status(201).json(rowToTodo(db.prepare('SELECT * FROM todos WHERE id = ?').get(id)));
 });
 
@@ -119,6 +140,12 @@ todosRouter.patch('/todos/:id', (req, res) => {
   if (isValidPriority(b.priority)) updates.priority = b.priority;
   if (isValidLine(b.line)) updates.line = b.line;
   if (typeof b.actual_deadline === 'string' || b.actual_deadline === null) updates.actual_deadline = b.actual_deadline || null;
+  // v2.3：承接人 / 顺序 / 验收标准
+  if (typeof b.assigned_agent === 'string') {
+    updates.assigned_agent = isValidExecutor(b.assigned_agent) && b.assigned_agent !== 'user' ? b.assigned_agent : null;
+  }
+  if (Number.isFinite(Number(b.step_order))) updates.step_order = Math.max(0, Math.trunc(Number(b.step_order)));
+  if (typeof b.acceptance === 'string') updates.acceptance = b.acceptance.slice(0, 120);
   if (isValidTodoStatus(b.status)) {
     updates.status = b.status;
     updates.completed_at = b.status === 'done' ? new Date().toISOString() : null;
@@ -127,8 +154,17 @@ todosRouter.patch('/todos/:id', (req, res) => {
   if (!Object.keys(updates).length) return res.status(400).json({ error: '没有可更新的字段' });
 
   const setSql = Object.keys(updates).map((k) => `${k} = @${k}`).join(', ');
-  db.prepare(`UPDATE todos SET ${setSql} WHERE id = @id`).run({ ...updates, id: req.params.id });
+  db.prepare(`UPDATE todos SET ${setSql}, updated_at = @updated_at WHERE id = @id`)
+    .run({ ...updates, id: req.params.id, updated_at: new Date().toISOString() });
   broadcast('todos', 'update', req.params.id);
+
+  // v2.3 续推钩子：用户手动完成 TODO → 放行下一条 agent-TODO + 复盘续推
+  // （Agent 自动完成走 worker.js finish() 直接写库，不经过这里，不会双重触发）
+  if (isValidTodoStatus(b.status) && b.status === 'done' && row.source_item_id) {
+    dispatchReadyTodos(row.source_item_id);
+    replanForItem(row.source_item_id, 'todo_done'); // fire-and-forget
+  }
+
   res.json(rowToTodo(db.prepare('SELECT * FROM todos WHERE id = ?').get(req.params.id)));
 });
 

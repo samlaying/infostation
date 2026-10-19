@@ -5,11 +5,12 @@ import { Router } from 'express';
 import { nanoid } from 'nanoid';
 import { db, rowToItem, rowToTodo, getSetting, transaction } from '../db.js';
 import { runAgent, llmConfigured } from '../services/agent.js';
+import { decomposeTodos } from '../services/planner-llm.js';
 import { extractUrl } from '../services/extractor.js';
 import { findDuplicate } from '../services/dedup.js';
 import { linkByTagOverlap } from '../services/relations.js';
 import { broadcast } from '../services/events.js';
-import { runPipeline } from '../orchestrator/worker.js';
+import { runPipeline, dispatchReadyTodos } from '../orchestrator/worker.js';
 import { detectPlatform, isUrl, isValidCategory, isValidPriority, isValidLine } from '../constants.js';
 
 export const processRouter = Router();
@@ -118,7 +119,8 @@ processRouter.post('/process', async (req, res, next) => {
       userContext: user_context,
       existingTags: [...new Set(topTags)].slice(0, 20),
       line: targetLine,
-      topics: topicRows.map((t) => t.name),
+      // v2.3：主题描述随名字一起进一次 pass 提示词（归属判断更准）
+      topics: topicRows.map((t) => ({ name: t.name, description: t.description })),
     });
 
     // ---- v2.0：主题解析（Agent 返回主题名 → topic_id；新主题自动建档）----
@@ -143,6 +145,26 @@ processRouter.post('/process', async (req, res, next) => {
     let itemType = 'material';
     if (/^发布包|^【发布包/.test(roleText) || (result.tags || []).includes('发布包')) itemType = 'bundle';
     else if (/^选题[｜:：]/.test(roleText) || (result.tags || []).includes('选题')) itemType = 'idea';
+
+    // ---- Step 3.5（v2.3）：专职拆解 pass —— 带承接人/顺序/验收标准的步骤链 ----
+    // 失败/未配 Key 返回 null，静默回退一次 pass 的 todos（全 user 承接）
+    const topicRow = topicId ? topicRows.find((t) => t.id === topicId) : null;
+    const siblingTodos = topicId
+      ? db.prepare('SELECT title, status FROM todos WHERE topic_id = ? ORDER BY created_at DESC LIMIT 10').all(topicId)
+      : [];
+    const plan = await decomposeTodos(rawInput, result, {
+      userGoals,
+      line: targetLine,
+      topic: topicRow ? { name: topicRow.name, description: topicRow.description } : null,
+      siblingTodos,
+    });
+    let todosFromAgent = result.todos || [];
+    if (plan && plan.note) {
+      result.agent_note = `🧭 拆解：${plan.note}\n${result.agent_note || ''}`.trim();
+    }
+    if (plan && plan.steps.length) {
+      todosFromAgent = plan.steps;
+    }
 
     if (extractWarning) {
       result.agent_note = `${extractWarning}\n${result.agent_note || ''}`.trim();
@@ -176,12 +198,14 @@ processRouter.post('/process', async (req, res, next) => {
 
     const insertTodo = db.prepare(`
       INSERT INTO todos (id, title, description, source_item_id, source_summary,
-        category, priority, status, suggested_deadline, tags, line, topic_id, created_at, updated_at)
+        category, priority, status, suggested_deadline, tags, line, topic_id,
+        assigned_agent, step_order, acceptance, created_at, updated_at)
       VALUES (@id, @title, @description, @source_item_id, @source_summary,
-        @category, @priority, 'pending', @suggested_deadline, @tags, @line, @topic_id, @created_at, @created_at)
+        @category, @priority, 'pending', @suggested_deadline, @tags, @line, @topic_id,
+        @assigned_agent, @step_order, @acceptance, @created_at, @created_at)
     `);
 
-    const todosToInsert = (result.todos || []).map((t) => {
+    const todosToInsert = todosFromAgent.map((t, i) => {
       const days = Number.isFinite(t.suggested_days) && t.suggested_days > 0 ? t.suggested_days : 3;
       const deadline = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
       return {
@@ -196,6 +220,9 @@ processRouter.post('/process', async (req, res, next) => {
         tags: JSON.stringify(result.tags.slice(0, 3)),
         line: targetLine,
         topic_id: topicId,
+        assigned_agent: t.assigned_agent || null,
+        step_order: typeof t.step_order === 'number' ? t.step_order : i + 1,
+        acceptance: t.acceptance || '',
         created_at: now,
       };
     });
@@ -238,6 +265,8 @@ processRouter.post('/process', async (req, res, next) => {
 
     // v2.2：异步启动预处理流水线（截图/调研/clone 由后台执行，不阻塞响应）
     const jobId = runPipeline(itemId, 'process');
+    // v2.3：agent-TODO 派工（search 步即刻自动执行；local/content 步将卡确认门）
+    dispatchReadyTodos(itemId);
 
     const item = rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(itemId));
     const todos = db
