@@ -181,7 +181,7 @@ cli-anything-infostation posts update 1 --status published --url https://xhs.exa
 | `jobs approve <id>` | 批准执行（放行给 Agent） |
 | `jobs skip <id>` | 跳过该步骤，继续推进 |
 | `jobs claim [--caps agent]` | **AI Agent 会话**认领委派任务（agent_task）；返回 `step.params` 含 title/description/acceptance 执行指令 |
-| `jobs complete <job> <step> --result "报告" [--title t] [--asset 截图.png] [--fail]` | 回传执行结果（报告写进卡片 agent_note；--asset 产物 base64 上传；--result 作为失败原因配 --fail） |
+| `jobs complete <job> <step> --result "报告" [--title t] [--asset 任意文件] [--result-file 报告.md] [--fail]` | 回传执行结果（报告写进卡片 agent_note；**产物务必 --asset 上传**——图片/文档任意类型，落卡片资产区可在线查看；--result-file 把整份文本文件内容作为报告正文；--result 作为失败原因配 --fail） |
 
 ```bash
 # 确认门工作流（网页 Inspector 也可以点按钮，两入口等价）
@@ -190,9 +190,13 @@ cli-anything-infostation jobs approve 12
 
 # AI Agent 会话执行委派任务
 cli-anything-infostation jobs claim                 # → {job, step, step_index}，step.params 是指令
-# ……用自身技能（ego-browser / ego-lite 等）完成任务……
-cli-anything-infostation jobs complete 12 0 --result "已注册并跑通 demo，截图见资产" --asset /tmp/demo.png
+# ……用自身技能（ego-browser / ego-lite 等）完成任务，产物文件必须上传……
+cli-anything-infostation jobs complete 12 0 \
+  --result-file /path/to/初稿.md --asset /path/to/初稿.md   # 报告=文件全文 + 文件落卡片资产区
+cli-anything-infostation jobs complete 12 0 --result "已注册并跑通 demo" --asset /tmp/demo.png  # 截图场景
 ```
+
+> **产物纪律**：agent_task 的交付物必须 `--asset` 上传（用户在网站上直接查看），本地路径只作留档；纯结论性报告可只 `--result`。
 
 ## 典型 Agent 工作流
 

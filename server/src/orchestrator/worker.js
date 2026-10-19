@@ -313,8 +313,10 @@ export function completeStep(jobId, stepIndex, { ok = true, result = null, error
     appendAgentNote(job.item_id, `🔎 GitHub 检索（${step.params?.query || ''}）：\n${lines}`);
   }
   // v2.3：Agent 委派任务的执行报告写进卡片（AI Agent 会话回传的文本结论）
+  // v2.3.1：产物文件（初稿/素材包等）已由路由层上传为资产，把站内链接拼进笔记
   if (ok && step.skill === 'agent_task' && result?.report) {
-    appendAgentNote(job.item_id, `🤖 Agent 执行报告（${result.title || step.params?.title || ''}）：\n${String(result.report).slice(0, 800)}`);
+    const assetLine = result.asset_url ? `\n📎 产物已上传：${result.asset_url}` : '';
+    appendAgentNote(job.item_id, `🤖 Agent 执行报告（${result.title || step.params?.title || ''}）：\n${String(result.report).slice(0, 800)}${assetLine}`);
   }
   advance(jobId);
   return getJob(jobId);

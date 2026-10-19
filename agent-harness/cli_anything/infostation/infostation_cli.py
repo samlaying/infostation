@@ -122,6 +122,8 @@ def cmd_todos(args: SimpleNamespace, cfg: Cfg) -> Any:
             title=args.title, description=args.desc, category=args.category,
             priority=args.priority, actual_deadline=args.deadline,
             source_item_id=args.source_item, line=args.line,
+            assigned_agent=(args.executor if args.executor != "user" else None),
+            acceptance=args.acceptance,
         ))
     if args.todos_cmd == "update":
         body = clean(
@@ -213,8 +215,14 @@ def _parse_ids(s: str | None) -> list[int] | None:
 
 # ---------- v2.3：jobs 任务命令组（确认门 + Agent 委派执行）----------
 
-ASSET_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-              ".webp": "image/webp", ".gif": "image/gif"}
+ASSET_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".webp": "image/webp", ".gif": "image/gif",
+    # v2.3.1：文本/文档类产物（图文初稿/素材包/报告）——上传到卡片资产
+    ".md": "text/markdown", ".txt": "text/plain", ".json": "application/json",
+    ".csv": "text/csv", ".html": "text/html", ".pdf": "application/pdf",
+    ".zip": "application/zip", ".mp4": "video/mp4",
+}
 
 
 def cmd_jobs(args: SimpleNamespace, cfg: Cfg) -> Any:
@@ -233,15 +241,22 @@ def cmd_jobs(args: SimpleNamespace, cfg: Cfg) -> Any:
         # AI Agent 会话认领：默认声明 agent 能力；返回的 step.params 即执行指令
         return client.get("/api/v1/agent-jobs/claim", cfg, caps=args.caps or "agent")
     if args.jobs_cmd == "complete":
+        report = args.result or ""
+        # --result-file：产物文件内容直接作为报告正文（图文初稿/整篇文档场景）
+        if args.result_file:
+            with open(args.result_file, "r", encoding="utf-8") as f:
+                report = f.read()
+            if not args.title:
+                args.title = os.path.basename(args.result_file)
         if args.fail:
-            body = {"ok": False, "error": (args.result or "执行失败")[:300]}
+            body = {"ok": False, "error": (report or "执行失败")[:300]}
         else:
-            body = {"ok": True, "result": {"title": args.title or "", "report": args.result or ""}}
+            body = {"ok": True, "result": {"title": args.title or "", "report": report}}
         if args.asset:
             ext = os.path.splitext(args.asset)[1].lower()
             body["upload"] = {
                 "filename": os.path.basename(args.asset),
-                "mime": ASSET_MIME.get(ext, "image/png"),
+                "mime": ASSET_MIME.get(ext, "application/octet-stream"),
                 "content_b64": _b64_file(args.asset),
                 "local_path": os.path.abspath(args.asset),
             }
@@ -546,6 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--deadline", help="YYYY-MM-DD")
     s.add_argument("--source-item")
     s.add_argument("--line", choices=["trial", "media"], help="产品线；缺省继承来源卡片，再缺省 trial")
+    s.add_argument("--executor", choices=["user", "search_agent", "local_agent", "content_agent"],
+                   help="v2.3 承接人（agent 类就绪即自动派工）")
+    s.add_argument("--acceptance", help="v2.3 验收标准")
     s = spp.add_parser("update", help="更新（完成/归档/改期等）")
     s.add_argument("id")
     s.add_argument("--status", choices=["pending", "in_progress", "done", "archived"])
@@ -677,8 +695,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("job", type=int)
     s.add_argument("step", type=int)
     s.add_argument("--result", help="执行报告文本（给用户看的结论）")
+    s.add_argument("--result-file", dest="result_file", help="产物文本文件（md/txt），内容直接作为报告正文上传展示")
     s.add_argument("--title", help="报告标题")
-    s.add_argument("--asset", help="可选产物文件路径（截图等，base64 上传）")
+    s.add_argument("--asset", help="产物文件路径（图片/文档任意类型，base64 上传为卡片资产）")
     s.add_argument("--fail", action="store_true", help="标记为失败（--result 作为错误原因）")
 
     # backup

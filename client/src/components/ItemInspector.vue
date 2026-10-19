@@ -174,8 +174,11 @@ async function toggleTodo(t) {
   }
 }
 
-/** 可预览的资产：有远程 URL 的直接出图；本地路径的给占位（由本地 Agent 上传图床后回填 --url） */
-const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.remote_url));
+/** 可预览的资产：图片直出；v2.3.1 文档类产物（md/pdf/…）走文件链接区 */
+const isImgUrl = (url) => /\.(png|jpe?g|webp|gif)$/i.test(url || '');
+const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.remote_url && isImgUrl(a.remote_url)));
+const fileAssets = computed(() => (props.item.assets || []).filter((a) => a.remote_url && !isImgUrl(a.remote_url)));
+const fileIcon = (a) => (/\.pdf$/i.test(a.remote_url) ? '📕' : /\.json|\.csv$/i.test(a.remote_url) ? '📊' : /\.md|\.txt|\.html$/i.test(a.remote_url) ? '📄' : '📦');
 </script>
 
 <template>
@@ -259,10 +262,10 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
         </div>
       </section>
 
-      <!-- Agent 视觉资产：截图 / 生图 / 图床 -->
+      <!-- Agent 资产：截图/生图直出预览；v2.3.1 文档产物（初稿/素材包）文件链接；本地路径给占位 -->
       <section v-if="item.assets?.length" class="inspector__section">
-        <h3>🖼 视觉资产（{{ item.assets.length }}）</h3>
-        <div class="inspector__assets">
+        <h3>📎 资产（{{ item.assets.length }}）</h3>
+        <div v-if="previewAssets.length" class="inspector__assets">
           <a
             v-for="a in previewAssets"
             :key="a.id"
@@ -274,14 +277,29 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
           >
             <img :src="a.remote_url" loading="lazy" alt="" />
           </a>
-          <div
-            v-for="a in (item.assets || []).filter((x) => !x.remote_url)"
-            :key="`local-${a.id}`"
-            class="inspector__asset inspector__asset--local"
-            :title="a.local_path"
+        </div>
+        <div v-if="fileAssets.length" class="inspector__files">
+          <a
+            v-for="a in fileAssets"
+            :key="`file-${a.id}`"
+            class="inspector__file"
+            :href="a.remote_url"
+            target="_blank"
+            rel="noopener"
+            :title="`${a.asset_type} · 点击查看/下载${a.prompt ? ' · ' + a.prompt : ''}`"
           >
-            📎 {{ a.asset_type === 'screenshot' ? '截图' : a.asset_type === 'ai_image' ? '生图' : '文件' }}（待上传图床）
-          </div>
+            <span class="inspector__file-icon">{{ fileIcon(a) }}</span>
+            <span class="inspector__file-name">{{ (a.prompt || '').replace(/^preexec:/, '') || a.remote_url.split('/').pop() }}</span>
+            <span class="inspector__file-open">查看 ↗</span>
+          </a>
+        </div>
+        <div
+          v-for="a in (item.assets || []).filter((x) => !x.remote_url)"
+          :key="`local-${a.id}`"
+          class="inspector__asset inspector__asset--local"
+          :title="a.local_path"
+        >
+          📎 {{ a.asset_type === 'screenshot' ? '截图' : a.asset_type === 'ai_image' ? '生图' : '文件' }}（待上传图床）
         </div>
       </section>
 
@@ -547,6 +565,29 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
   text-align: center;
   border-style: dashed;
 }
+
+/* v2.3.1 文档类产物：文件链接行（初稿/素材包等，点击新窗口查看） */
+.inspector__files { display: flex; flex-direction: column; gap: var(--space-3); }
+.inspector__file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  background: var(--glass-bg-faint);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  font: var(--font-micro);
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+.inspector__file:hover {
+  color: var(--text-primary);
+  border-color: var(--glass-border-hover);
+  background: var(--glass-hover);
+}
+.inspector__file-icon { font-size: 15px; }
+.inspector__file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inspector__file-open { color: var(--accent-cyan); white-space: nowrap; }
 
 .inspector__points {
   list-style: none;
