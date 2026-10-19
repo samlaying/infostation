@@ -49,6 +49,10 @@ CREATE TABLE IF NOT EXISTS todos (
   actual_deadline    TEXT,
   tags               TEXT NOT NULL DEFAULT '[]',    -- JSON string[]
   line               TEXT NOT NULL DEFAULT 'trial', -- 产品线：trial(行动项) | media(内容工序)
+  assigned_agent     TEXT,                          -- v2.3 承接人：null/user=本人 | search_agent | local_agent | content_agent
+  step_order         INTEGER NOT NULL DEFAULT 0,    -- v2.3 同卡步骤序（决定派工就绪顺序）
+  acceptance         TEXT NOT NULL DEFAULT '',      -- v2.3 验收标准（做到什么算完成）
+  auto_status        TEXT NOT NULL DEFAULT '',      -- v2.3 agent 执行态：''|dispatched|running|done|failed|skipped
   created_at         TEXT NOT NULL,
   completed_at       TEXT
 );
@@ -111,13 +115,15 @@ CREATE TABLE IF NOT EXISTS posts (
 -- 卡片入库后由 orchestrator 生成技能执行计划；重型技能（浏览器截图/gh clone）
 -- 没有部署在生产 VPS 上，标记 runtime='local'，由用户 Mac 上的 CLI worker
 -- 通过 REST 认领执行、回传产物（截图上传为静态文件并登记 assets）。
+-- v2.3：status 不再设 DB CHECK（SQLite 无法 ALTER，状态权威在 constants.js），
+--       新增 awaiting_user（确认门）与 todo_id（TODO 派发的 job 关联源 TODO）。
 CREATE TABLE IF NOT EXISTS agent_jobs (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   item_id      TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-  status       TEXT NOT NULL DEFAULT 'pending'
-               CHECK(status IN ('pending', 'running', 'waiting_local', 'completed', 'failed')),
+  todo_id      TEXT REFERENCES todos(id) ON DELETE CASCADE,
+  status       TEXT NOT NULL DEFAULT 'pending',
   current_step TEXT,             -- 展示用："正在调用 ego 浏览器截图…"
-  skills_plan  TEXT NOT NULL DEFAULT '[]',  -- JSON: [{skill, params, runtime: server|local, reason}]
+  skills_plan  TEXT NOT NULL DEFAULT '[]',  -- JSON: [{skill, params, runtime: server|local, needs_confirm?, reason}]
   logs         TEXT NOT NULL DEFAULT '[]',  -- JSON: [{skill, status, result, error, started_at, finished_at}]
   error_msg    TEXT,
   created_at   TEXT NOT NULL DEFAULT (datetime('now')),
@@ -164,7 +170,46 @@ if (addColumnIfMissing('items', 'parent_item_id', 'TEXT REFERENCES items(id) ON 
 if (addColumnIfMissing('items', 'updated_at', "TEXT NOT NULL DEFAULT ''")) migrated.push('items.updated_at');
 if (addColumnIfMissing('todos', 'topic_id', 'INTEGER REFERENCES topics(id) ON DELETE SET NULL')) migrated.push('todos.topic_id');
 if (addColumnIfMissing('todos', 'updated_at', "TEXT NOT NULL DEFAULT ''")) migrated.push('todos.updated_at');
+// ===== v2.3：todos 智能派工四列 =====
+if (addColumnIfMissing('todos', 'assigned_agent', 'TEXT')) migrated.push('todos.assigned_agent');
+if (addColumnIfMissing('todos', 'step_order', 'INTEGER NOT NULL DEFAULT 0')) migrated.push('todos.step_order');
+if (addColumnIfMissing('todos', 'acceptance', "TEXT NOT NULL DEFAULT ''")) migrated.push('todos.acceptance');
+if (addColumnIfMissing('todos', 'auto_status', "TEXT NOT NULL DEFAULT ''")) migrated.push('todos.auto_status');
+if (addColumnIfMissing('agent_jobs', 'todo_id', 'TEXT REFERENCES todos(id) ON DELETE CASCADE')) migrated.push('agent_jobs.todo_id');
 if (migrated.length) console.log(`[db] 已补充列: ${migrated.join(', ')}`);
+
+// ===== v2.3：agent_jobs 一次性表重建 =====
+// 旧表 status 带 CHECK（不含 awaiting_user），SQLite 无法 ALTER CHECK，
+// 检测到旧结构则事务内重建为无 CHECK 版本（状态权威挪到 constants.js）。
+const jobsDdl = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_jobs'`).get();
+if (jobsDdl && /CHECK\s*\(\s*status/i.test(jobsDdl.sql || '')) {
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE agent_jobs_rebuild (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id      TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        todo_id      TEXT REFERENCES todos(id) ON DELETE CASCADE,
+        status       TEXT NOT NULL DEFAULT 'pending',
+        current_step TEXT,
+        skills_plan  TEXT NOT NULL DEFAULT '[]',
+        logs         TEXT NOT NULL DEFAULT '[]',
+        error_msg    TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO agent_jobs_rebuild (id, item_id, todo_id, status, current_step, skills_plan, logs, error_msg, created_at, updated_at)
+        SELECT id, NULL, NULL, status, current_step, skills_plan, logs, error_msg, created_at, updated_at FROM agent_jobs;
+      DROP TABLE agent_jobs;
+      ALTER TABLE agent_jobs_rebuild RENAME TO agent_jobs;
+    `);
+    db.exec('COMMIT');
+    console.log('[db] agent_jobs 已重建：status 去 CHECK（新增 awaiting_user），补 todo_id 列');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
 
 // 存量行 updated_at 为空串，回填为 created_at
 db.exec(`UPDATE items SET updated_at = created_at WHERE updated_at = ''`);
@@ -182,6 +227,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_source     ON posts(source_item_id);
 CREATE INDEX IF NOT EXISTS idx_posts_status     ON posts(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_item        ON agent_jobs(item_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_status      ON agent_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_todo        ON agent_jobs(todo_id);
+CREATE INDEX IF NOT EXISTS idx_todos_agent      ON todos(assigned_agent);
 `);
 
 // ===== v2.0：触发器 —— 母卡 line/topic_id 变更时自动同步名下 todos（消灭漂移）=====

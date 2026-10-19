@@ -45,6 +45,25 @@ export const ASSET_TYPES = ['screenshot', 'ai_image', 'upload', 'video'];
 export const POST_PLATFORMS = ['xiaohongshu', 'wechat', 'x', 'bilibili', 'zhihu'];
 export const POST_STATUSES = ['draft', 'ready', 'publishing', 'published', 'failed'];
 
+// ===== v2.3：TODO 承接人（智能派工）=====
+// user/null=用户本人 | search_agent=联网调研(只读,自动执行) | local_agent=本机操作(需确认)
+// | content_agent=内容生产(需确认)
+export const AGENT_EXECUTORS = ['user', 'search_agent', 'local_agent', 'content_agent'];
+export function isValidExecutor(v) {
+  return AGENT_EXECUTORS.includes(v);
+}
+
+// agent_jobs 任务状态（v2.3 起权威在代码层，DB 不再设 CHECK——SQLite 无法 ALTER CHECK）
+// awaiting_user=卡在确认门等用户批准/跳过
+export const AGENT_JOB_STATUSES = ['pending', 'running', 'awaiting_user', 'waiting_local', 'completed', 'failed'];
+export function isValidJobStatus(v) {
+  return AGENT_JOB_STATUSES.includes(v);
+}
+
+// TODO 的 agent 执行态（与人用的 status 分离，互不污染）
+// ''=未派发 | dispatched=已入队 | running=Agent 执行中 | done/failed/skipped=终态
+export const TODO_AUTO_STATUSES = ['', 'dispatched', 'running', 'done', 'failed', 'skipped'];
+
 export function isValidAssetType(v) {
   return ASSET_TYPES.includes(v);
 }

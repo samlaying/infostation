@@ -89,6 +89,20 @@ export const TODO_STATUS_MAP = {
   archived: '已归档',
 };
 
+// ===== v2.3 TODO 承接人（与后端 AGENT_EXECUTORS 一致）=====
+export const EXECUTOR_MAP = {
+  user: { label: '我', icon: '' },
+  search_agent: { label: '搜索', icon: '🔎' },
+  local_agent: { label: '本地', icon: '🖥' },
+  content_agent: { label: '内容', icon: '✍️' },
+};
+
+// TODO 的 agent 执行态徽标（auto_status 字段）
+export const AUTO_STATUS_MAP = {
+  dispatched: '已排队',
+  running: 'Agent 执行中',
+};
+
 // 目标看板三列（PRD 三大目标领域）
 export const GOAL_COLUMNS = [
   { key: 'career', label: '职场提升', icon: '🚀' },
