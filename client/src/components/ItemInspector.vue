@@ -228,7 +228,7 @@ async function toggleViewer(a) {
 }
 
 // ===== v2.3.2 选中感知：划选产物文字 → 浮动菜单（出处 + 一键变要点/TODO/笔记）=====
-const selMenu = reactive({ show: false, x: 0, y: 0, text: '', file: '', section: '' });
+const selMenu = reactive({ show: false, x: 0, y: 0, text: '', file: '', section: '', below: false });
 
 function closeSelMenu() {
   selMenu.show = false;
@@ -254,8 +254,11 @@ function onSelect(ev) {
   selMenu.text = text.slice(0, 300);
   selMenu.file = assetName(viewer.asset || {});
   selMenu.section = sectionOf(sel.anchorNode);
-  selMenu.x = Math.min(rect.left + rect.width / 2, window.innerWidth - 150);
-  selMenu.y = rect.top - 8 + window.scrollY;
+  // fixed 定位用视口坐标：选区在阅读器滚动容器内，window.scrollY 不参与
+  selMenu.x = Math.max(150, Math.min(rect.left + rect.width / 2, window.innerWidth - 150));
+  const MENU_H = 64;
+  selMenu.y = rect.top > MENU_H + 16 ? rect.top - 8 : rect.bottom + 8;
+  selMenu.below = !(rect.top > MENU_H + 16);
   selMenu.show = true;
 }
 
@@ -493,22 +496,25 @@ async function addAsNote() {
       <div v-if="item.agent_note" class="inspector__note">🤖 {{ item.agent_note }}</div>
     </div>
 
-    <!-- v2.3.2 划选浮动菜单：感知出处，一键添加 -->
-    <div
-      v-if="selMenu.show"
-      class="inspector__selmenu"
-      :style="{ left: selMenu.x + 'px', top: selMenu.y + 'px' }"
-      @mousedown.prevent
-    >
-      <div class="inspector__selmenu-src">
-        摘自 {{ selMenu.file }}<template v-if="selMenu.section"> · {{ selMenu.section }}</template>
+    <!-- v2.3.2 划选浮动菜单：Teleport 到 body——aside 的 backdrop-filter 会创建 containing block，fixed 会退化成面板内定位 -->
+    <Teleport to="body">
+      <div
+        v-if="selMenu.show"
+        class="inspector__selmenu"
+        :class="{ 'is-below': selMenu.below }"
+        :style="{ left: selMenu.x + 'px', top: selMenu.y + 'px' }"
+        @mousedown.prevent
+      >
+        <div class="inspector__selmenu-src">
+          摘自 {{ selMenu.file }}<template v-if="selMenu.section"> · {{ selMenu.section }}</template>
+        </div>
+        <div class="inspector__selmenu-actions">
+          <button title="加入卡片要点" @click="addAsPoint">→ 要点</button>
+          <button title="生成一条 TODO（继承卡片线/主题）" @click="addAsTodo">→ TODO</button>
+          <button title="追加到卡片笔记" @click="addAsNote">→ 笔记</button>
+        </div>
       </div>
-      <div class="inspector__selmenu-actions">
-        <button title="加入卡片要点" @click="addAsPoint">→ 要点</button>
-        <button title="生成一条 TODO（继承卡片线/主题）" @click="addAsTodo">→ TODO</button>
-        <button title="追加到卡片笔记" @click="addAsNote">→ 笔记</button>
-      </div>
-    </div>
+    </Teleport>
   </aside>
 </template>
 
@@ -823,9 +829,9 @@ async function addAsNote() {
 .inspector__md :deep(a) { color: var(--accent-cyan); }
 .inspector__md ::selection { background: rgba(6, 182, 212, 0.3); }
 
-/* v2.3.2 划选浮动菜单 */
+/* v2.3.2 划选浮动菜单：fixed 视口定位，选区上方弹出（贴顶时翻到下方） */
 .inspector__selmenu {
-  position: absolute;
+  position: fixed;
   z-index: 60;
   transform: translate(-50%, -100%);
   background: rgba(15, 23, 42, 0.92);
@@ -836,6 +842,7 @@ async function addAsNote() {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
   min-width: 200px;
 }
+.inspector__selmenu.is-below { transform: translate(-50%, 0); }
 .inspector__selmenu-src {
   font: var(--font-micro);
   color: #94a3b8;
