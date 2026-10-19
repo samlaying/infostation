@@ -282,22 +282,31 @@ def _exec_browser_screenshot(step: dict) -> dict:
     """
     url = step["params"]["url"]
     out = os.path.join(tempfile.mkdtemp(prefix="infostation-shot-"), "page.png")
+    # 两个超时坑：goto 默认 15s 在代理下常不够；networkidle 后立刻取 title
+    # 可能撞上 CDP Runtime.evaluate 超时——都降级为可继续，截图照落。
     script = (
         "const task = await taskSpace('infostation-preexec');\n"
         "const page = task.page('p1');\n"
-        f"try {{ await page.goto({json.dumps(url)}); }} catch (e) {{ console.log(JSON.stringify({{nav_warn: String(e).slice(0, 120)}})); }}\n"
-        "try { await page.waitForLoadState('networkidle'); } catch {}\n"
+        f"try {{ await page.goto({json.dumps(url)}, {{ timeout: 60000 }}); }} catch (e) {{ console.log(JSON.stringify({{nav_warn: String(e).slice(0, 120)}})); }}\n"
+        "try { await page.waitForLoadState('networkidle', { timeout: 20000 }); } catch { try { await page.waitForLoadState('load', { timeout: 20000 }); } catch {} }\n"
         "await page.waitForTimeout(2500);\n"
         f"const path = await page.screenshot({{ path: {json.dumps(out)} }});\n"
-        "console.log(JSON.stringify({ ok: true, path, title: await page.title() }));"
+        "let title = '';\n"
+        "try { title = await page.title(); } catch {}\n"
+        "console.log(JSON.stringify({ ok: true, path, title }));"
     )
     p = _sh(["ego-browser", "nodejs", "-e", script], timeout=180)
     result = None
-    for line in p.stdout.splitlines():
-        if '"ok": true' in line:
-            result = json.loads(line)
+    # ego-browser 的 console.log 落在 stderr（stdout 恒空），两路都要扫。
+    for line in (p.stdout + "\n" + p.stderr).splitlines():
+        try:
+            data = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(data, dict) and data.get("ok") is True and data.get("path"):
+            result = data
     if not result:
-        raise RuntimeError(f"ego-browser 输出未含结果: {p.stdout[-200:]}")
+        raise RuntimeError(f"ego-browser 输出未含结果: {(p.stdout + p.stderr)[-200:]}")
     result.setdefault("title", "")
     return result
 
@@ -396,7 +405,7 @@ def cmd_worker(args: SimpleNamespace, cfg: Cfg) -> dict | None:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="cli-anything-infostation", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--url", help="InfoStation 地址（默认取 config/环境变量）")
+    p.add_argument("--url", dest="server_url", help="InfoStation 地址（默认取 config/环境变量）")
     p.add_argument("--token", help="API Token（默认取 config/环境变量）")
     p.add_argument("--pretty", action="store_true", help="美化 JSON 输出")
     sub = p.add_subparsers(dest="group", required=True)
@@ -615,8 +624,8 @@ HANDLERS = {
 def main(argv: list[str] | None = None) -> None:
     args: SimpleNamespace = build_parser().parse_args(argv)
     cfg = client.load_config()
-    if args.url:
-        cfg.url = args.url
+    if args.server_url:
+        cfg.url = args.server_url
     if args.token:
         cfg.token = args.token
     try:
