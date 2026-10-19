@@ -220,7 +220,8 @@ processRouter.post('/process', async (req, res, next) => {
         tags: JSON.stringify(result.tags.slice(0, 3)),
         line: targetLine,
         topic_id: topicId,
-        assigned_agent: t.assigned_agent || null,
+        // v2.3：DB 契约——NULL/user 都表示本人承接（'user' 字符串转 NULL，避免被派工）
+        assigned_agent: t.assigned_agent && t.assigned_agent !== 'user' ? t.assigned_agent : null,
         step_order: typeof t.step_order === 'number' ? t.step_order : i + 1,
         acceptance: t.acceptance || '',
         created_at: now,

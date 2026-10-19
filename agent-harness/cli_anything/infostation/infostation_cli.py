@@ -390,7 +390,7 @@ def _exec_gh_search(step: dict) -> dict:
     if not query:
         raise RuntimeError("gh_search 缺少 query 参数")
     p = _sh(["gh", "search", "repos", query, "--json",
-             "fullName,description,stargazerCount,updatedAt", "--limit", "5"], timeout=60)
+             "fullName,description,stargazersCount,updatedAt", "--limit", "5"], timeout=60)
     repos = json.loads(p.stdout)
     return {"query": query, "repos": repos}
 

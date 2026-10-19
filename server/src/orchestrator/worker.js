@@ -299,10 +299,16 @@ export function completeStep(jobId, stepIndex, { ok = true, result = null, error
     appendAgentNote(job.item_id, lines.join('\n'));
   }
   // v2.3：gh 搜索结果摘要点缀到卡片（找仓库类调研步）
+  // 字段兼容：gh CLI 返回 fullName/stargazersCount，内部约定 full_name/stars
   if (ok && step.skill === 'gh_search' && Array.isArray(result?.repos) && result.repos.length) {
     const lines = result.repos
       .slice(0, 5)
-      .map((r) => `· ${r.full_name} ⭐${r.stars ?? '?'}${r.description ? ` — ${String(r.description).slice(0, 60)}` : ''}`)
+      .map((r) => {
+        const name = r.full_name || r.fullName || '?';
+        const stars = r.stars ?? r.stargazersCount ?? '?';
+        const desc = r.description ? ` — ${String(r.description).slice(0, 60)}` : '';
+        return `· ${name} ⭐${stars}${desc}`;
+      })
       .join('\n');
     appendAgentNote(job.item_id, `🔎 GitHub 检索（${step.params?.query || ''}）：\n${lines}`);
   }
