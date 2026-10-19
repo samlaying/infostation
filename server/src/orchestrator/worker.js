@@ -8,13 +8,16 @@
 
 import { db, rowToItem, rowToJob } from '../db.js';
 import { broadcast } from '../services/events.js';
-import { planFor } from './planner.js';
+import { planFor, planTodoJob } from './planner.js';
+import { replanForItem } from '../services/planner-llm.js';
 import { tavilyConfigured, tavilySearch } from '../skills/tavily.js';
 
 const STEP_LABELS = {
   tavily_search: '联网调研（Tavily）',
   browser_screenshot: 'ego 浏览器截图',
   gh_inspect: 'GitHub 检查 + Clone',
+  gh_search: 'GitHub 搜索',
+  agent_task: 'Agent 委派任务',
 };
 
 function nowIso() {
@@ -96,6 +99,14 @@ export function advance(jobId) {
   const step = job.skills_plan[idx];
   const entry = { skill: step.skill, status: 'running', started_at: nowIso(), result: null, error: null };
 
+  // v2.3 确认门：needs_confirm 的步先卡住等用户批准（网页 Inspector / CLI jobs approve）
+  if (step.needs_confirm) {
+    job.status = 'awaiting_user';
+    job.current_step = `⏸ 等你确认：${STEP_LABELS[step.skill]}（${step.reason || ''}）`;
+    saveJob(job);
+    return;
+  }
+
   if (step.runtime === 'local') {
     // 交给本地 worker：置 waiting_local，claim 时会把该步标 running
     job.status = 'waiting_local';
@@ -139,6 +150,101 @@ async function runServerStep(step, itemId) {
   throw new Error(`未知 server 技能: ${step.skill}`);
 }
 
+// ===== v2.3：确认门（批准/跳过）+ TODO 派工 =====
+
+/** 用户对 awaiting_user 的步做决定：approve=放行执行，skip=跳过该步继续推进 */
+export function approveStep(jobId, action) {
+  const job = getJob(jobId);
+  if (!job) throw new Error('任务不存在');
+  if (job.status !== 'awaiting_user') throw new Error('任务不在待确认状态');
+  const step = job.skills_plan[job.logs.length];
+  if (!step) throw new Error('没有待确认的步骤');
+
+  if (action === 'skip') {
+    const logs = job.logs;
+    logs.push({
+      skill: step.skill,
+      status: 'skipped',
+      result: null,
+      error: null,
+      started_at: nowIso(),
+      finished_at: nowIso(),
+    });
+    job.logs = logs;
+    job.current_step = `已跳过：${STEP_LABELS[step.skill]}`;
+    saveJob(job);
+    advance(jobId);
+    return getJob(jobId);
+  }
+
+  // approve：local 步放行给 CLI worker 认领；server 步直接推进执行
+  if (step.runtime === 'local') {
+    job.status = 'waiting_local';
+    job.current_step = `已批准，等待本地 Agent 认领：${STEP_LABELS[step.skill]}`;
+    saveJob(job);
+  } else {
+    job.status = 'pending';
+    saveJob(job);
+    advance(jobId);
+  }
+  return getJob(jobId);
+}
+
+/** 单条 agent-TODO 的执行态写回 + 广播 */
+function setTodoAuto(todoId, autoStatus, extra = {}) {
+  if (!todoId) return;
+  const sets = ['auto_status = ?', 'updated_at = ?'];
+  const vals = [autoStatus, nowIso()];
+  for (const [k, v] of Object.entries(extra)) {
+    sets.push(`${k} = ?`);
+    vals.push(v);
+  }
+  vals.push(todoId);
+  db.prepare(`UPDATE todos SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+  broadcast('todos', 'update', todoId);
+}
+
+/**
+ * v2.3：派工入口——把卡片上「就绪」的 agent-TODO 变成 agent_jobs。
+ * 就绪 = assigned_agent 非空 && status=pending && auto_status=''（未派发过）
+ *        && 同卡没有更小 step_order 的未完结步骤（顺序推进，一次只放行最前一条）。
+ * 挂载点：process 落库后 / agent job 终态后 / 手动完成 TODO 后。
+ */
+export function dispatchReadyTodos(itemId) {
+  try {
+    const todos = db
+      .prepare(`SELECT * FROM todos WHERE source_item_id = ? AND assigned_agent IS NOT NULL
+                AND status = 'pending' AND (auto_status = '' OR auto_status IS NULL)
+                ORDER BY step_order, created_at`)
+      .all(itemId);
+    for (const todo of todos) {
+      const blocked = db
+        .prepare(`SELECT COUNT(*) c FROM todos WHERE source_item_id = ? AND id != ?
+                  AND step_order < ? AND status IN ('pending','in_progress')`)
+        .get(itemId, todo.id, todo.step_order || 0).c;
+      if (blocked) continue; // 前面还有没走完的步骤，先不放行
+
+      const item = rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(itemId));
+      if (!item) return;
+      const plan = planTodoJob(todo, item);
+      if (!plan.length) continue;
+
+      const info = db
+        .prepare(`INSERT INTO agent_jobs (item_id, todo_id, status, current_step, skills_plan, logs, created_at, updated_at)
+                  VALUES (?, ?, 'pending', ?, ?, '[]', ?, ?)`)
+        .run(itemId, todo.id, `规划完成：${plan.map((p) => STEP_LABELS[p.skill]).join(' → ')}`,
+          JSON.stringify(plan), nowIso(), nowIso());
+      setTodoAuto(todo.id, 'dispatched');
+      broadcast('jobs', 'create', itemId);
+      console.log(`[orchestrator] todo-job#${info.lastInsertRowid} 派发 (${todo.assigned_agent})：${todo.title.slice(0, 20)}`);
+      setImmediate(() => advance(Number(info.lastInsertRowid)));
+      return; // 一次只放行最前一条，链式推进
+    }
+  } catch (err) {
+    console.error('[orchestrator] dispatchReadyTodos 失败:', err.message);
+  }
+}
+
 /** CLI worker 认领：找到第一个处于 waiting_local 且技能匹配其能力 caps 的 job 步 */
 export function claimLocalStep(caps = []) {
   const rows = db
@@ -151,12 +257,13 @@ export function claimLocalStep(caps = []) {
     if (!step || step.runtime !== 'local') continue;
     if (!step.caps?.length) {
       // planner 未标注 caps 时按 registry 兜底
-      const reg = { browser_screenshot: ['browser'], gh_inspect: ['gh'] }[step.skill] || [];
+      const reg = { browser_screenshot: ['browser'], gh_inspect: ['gh'], gh_search: ['gh'], agent_task: ['agent'] }[step.skill] || [];
       if (!reg.some((c) => caps.includes(c))) continue;
     } else if (!step.caps.some((c) => caps.includes(c))) continue;
     job.status = 'running';
     job.current_step = `本地 Agent 正在${STEP_LABELS[step.skill]}…`;
     saveJob(job);
+    if (job.todo_id) setTodoAuto(job.todo_id, 'running'); // v2.3：TODO 徽标同步"执行中"
     return { job: { id: job.id, item_id: job.item_id, status: job.status }, step_index: idx, step };
   }
   return null;
@@ -191,28 +298,84 @@ export function completeStep(jobId, stepIndex, { ok = true, result = null, error
     if (result.install_hints?.length) lines.push(`安装命令（README 提取）：\n${result.install_hints.map((c) => `· ${c}`).join('\n')}`);
     appendAgentNote(job.item_id, lines.join('\n'));
   }
+  // v2.3：gh 搜索结果摘要点缀到卡片（找仓库类调研步）
+  if (ok && step.skill === 'gh_search' && Array.isArray(result?.repos) && result.repos.length) {
+    const lines = result.repos
+      .slice(0, 5)
+      .map((r) => `· ${r.full_name} ⭐${r.stars ?? '?'}${r.description ? ` — ${String(r.description).slice(0, 60)}` : ''}`)
+      .join('\n');
+    appendAgentNote(job.item_id, `🔎 GitHub 检索（${step.params?.query || ''}）：\n${lines}`);
+  }
+  // v2.3：Agent 委派任务的执行报告写进卡片（AI Agent 会话回传的文本结论）
+  if (ok && step.skill === 'agent_task' && result?.report) {
+    appendAgentNote(job.item_id, `🤖 Agent 执行报告（${result.title || step.params?.title || ''}）：\n${String(result.report).slice(0, 800)}`);
+  }
   advance(jobId);
   return getJob(jobId);
 }
 
+/** 从 job 已完成步提取一句结果摘要（写回 TODO/卡片用） */
+function summarizeJobResult(job) {
+  const parts = [];
+  for (const l of job.logs) {
+    if (l.status !== 'done' || !l.result) continue;
+    const r = l.result;
+    if (l.skill === 'agent_task' && r.report) parts.push(String(r.report).slice(0, 160));
+    else if (l.skill === 'tavily_search' && r.summary) parts.push(String(r.summary).slice(0, 120));
+    else if (l.skill === 'gh_inspect' && r.clone_path) parts.push(`已 Clone：${r.clone_path}`);
+    else if (l.skill === 'gh_search' && Array.isArray(r.repos) && r.repos[0]) parts.push(`GitHub：${r.repos[0].full_name}`);
+    else if (l.skill === 'browser_screenshot' && r.asset_url) parts.push(`截图：${r.asset_url}`);
+  }
+  return parts.join('；').slice(0, 280);
+}
+
 function finish(job) {
-  const failed = job.logs.filter((l) => l.status === 'failed');
-  job.status = failed.length === job.logs.length && job.logs.length ? 'failed' : 'completed';
-  job.current_step = job.logs.map((l) => `${l.status === 'done' ? '✓' : l.status === 'failed' ? '✗' : '·'} ${STEP_LABELS[l.skill]}`).join(' ');
-  if (failed.length) job.error_msg = failed.map((f) => `${f.skill}: ${f.error}`).join('; ');
+  const doneN = job.logs.filter((l) => l.status === 'done').length;
+  const failedN = job.logs.filter((l) => l.status === 'failed').length;
+  const skippedN = job.logs.filter((l) => l.status === 'skipped').length;
+  job.status = failedN === job.logs.length && job.logs.length ? 'failed' : 'completed';
+  job.current_step = job.logs
+    .map((l) => `${l.status === 'done' ? '✓' : l.status === 'failed' ? '✗' : l.status === 'skipped' ? '⏭' : '·'} ${STEP_LABELS[l.skill]}`)
+    .join(' ');
+  if (failedN) job.error_msg = job.logs.filter((l) => l.status === 'failed').map((f) => `${f.skill}: ${f.error}`).join('; ');
   saveJob(job);
-  if (job.status === 'completed') {
-    appendAgentNote(job.item_id, `🤖 预处理完成（${job.logs.filter((l) => l.status === 'done').length} 项技能）`);
+
+  if (job.todo_id) {
+    // v2.3：TODO 派发 job 终态收口——结果回写 TODO，链式放行下一条，然后续推复盘
+    const todo = db.prepare('SELECT id, title, description FROM todos WHERE id = ?').get(job.todo_id);
+    if (todo) {
+      if (doneN > 0) {
+        const summary = summarizeJobResult(job);
+        db.prepare('UPDATE todos SET status = ?, completed_at = ?, auto_status = ?, description = ?, updated_at = ? WHERE id = ?')
+          .run('done', nowIso(), 'done',
+            summary ? `${todo.description}\n—\n🤖 ${summary}`.slice(0, 500) : todo.description,
+            nowIso(), todo.id);
+        broadcast('todos', 'completed', todo.id);
+        appendAgentNote(job.item_id, `✅ TODO 完成（Agent）：${todo.title}`);
+      } else if (skippedN === job.logs.length) {
+        // 用户逐条跳过 → 该 TODO 归档（不做了）
+        setTodoAuto(todo.id, 'skipped', { status: 'archived' });
+      } else if (failedN === job.logs.length) {
+        // 全失败 → 保持 pending 交给用户处置，标记 auto failed 不再自动重派
+        setTodoAuto(todo.id, 'failed');
+        appendAgentNote(job.item_id, `⚠️ TODO 自动执行失败（保留待手动处理）：${todo.title}`);
+      }
+    }
+    dispatchReadyTodos(job.item_id);
+    replanForItem(job.item_id, 'job_done'); // fire-and-forget
+  } else if (job.status === 'completed') {
+    appendAgentNote(job.item_id, `🤖 预处理完成（${doneN} 项技能）`);
   }
   console.log(`[orchestrator] job#${job.id} ${job.status}`);
 }
 
 /** 产物登记由路由层完成（需要写文件 + 建 asset），worker 只管编排 */
-export function listJobs({ item_id, status, limit = 20 } = {}) {
+export function listJobs({ item_id, status, todo_id, limit = 20 } = {}) {
   const where = [];
   const params = [];
   if (item_id) { where.push('item_id = ?'); params.push(item_id); }
   if (status) { where.push('status = ?'); params.push(status); }
+  if (todo_id) { where.push('todo_id = ?'); params.push(todo_id); }
   const sql = `SELECT * FROM agent_jobs ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ${Math.min(100, limit)}`;
   return db.prepare(sql).all(...params).map(rowToJob);
 }
