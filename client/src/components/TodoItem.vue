@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue';
-import { PRIORITY_MAP, LINE_MAP, timeAgo, fmtDate } from '../constants';
+import { PRIORITY_MAP, LINE_MAP, EXECUTOR_MAP, AUTO_STATUS_MAP, timeAgo, fmtDate } from '../constants';
 import { useTodosStore } from '../stores/todos';
 import { useTopicsStore } from '../stores/topics';
 import { toastError, toastSuccess, toast } from '../stores/toast';
@@ -16,6 +16,9 @@ const emit = defineEmits(['open-source']);
 const todosStore = useTodosStore();
 const topicsStore = useTopicsStore();
 const isDone = computed(() => props.todo.status === 'done');
+// v2.3：承接人（user/空=本人不显示徽标）与 agent 执行态
+const executor = computed(() => (props.todo.assigned_agent && props.todo.assigned_agent !== 'user' ? EXECUTOR_MAP[props.todo.assigned_agent] : null));
+const autoBadge = computed(() => (!isDone.value && AUTO_STATUS_MAP[props.todo.auto_status]) || null);
 const isOverdue = computed(() => {
   if (isDone.value) return false;
   const d = props.todo.actual_deadline || props.todo.suggested_deadline;
@@ -64,6 +67,8 @@ async function archive() {
         />
       </div>
       <div class="todo-item__meta">
+        <span v-if="executor" class="todo-item__agent" title="Agent 承接">{{ executor.icon }} {{ executor.label }}</span>
+        <span v-if="autoBadge" class="todo-item__auto">{{ autoBadge }}</span>
         <span v-if="todo.topic_id && topicsStore.nameOf(todo.topic_id)" class="todo-item__cat">
           📁 {{ topicsStore.nameOf(todo.topic_id) }}
         </span>
@@ -144,6 +149,28 @@ async function archive() {
 .todo-item__deadline.is-overdue { color: var(--accent-red); }
 .todo-item__source { cursor: pointer; transition: color var(--transition-fast); }
 .todo-item__source:hover { color: var(--accent-cyan); }
+
+/* v2.3 承接人徽标：紫系 Agent 渐变（--line-agent tokens） */
+.todo-item__agent {
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(147, 51, 234, 0.35);
+  background: linear-gradient(135deg, rgba(147, 51, 234, 0.16), rgba(59, 130, 246, 0.12));
+  color: #d8b4fe;
+  white-space: nowrap;
+}
+.todo-item__auto {
+  color: #67e8f9;
+  white-space: nowrap;
+}
+.todo-item__auto::before {
+  content: '◉ ';
+  animation: todo-auto-pulse 1.6s ease-in-out infinite;
+}
+@keyframes todo-auto-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
 
 .todo-item__actions {
   display: flex;

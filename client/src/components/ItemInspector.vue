@@ -6,8 +6,9 @@
 import { computed, ref, reactive, watch, onBeforeUnmount } from 'vue';
 import { useTodosStore } from '../stores/todos';
 import { PLATFORM_MAP, PRIORITY_MAP, FORM_MAP, itemForm, timeAgo, fmtDate } from '../constants';
-import { fetchJobs, reprocessItem, patchItem } from '../api';
-import { toastError, toastSuccess } from '../stores/toast';
+import { fetchJobs, reprocessItem, patchItem, approveJob } from '../api';
+import { subscribeLive } from '../api/live';
+import { toastError, toastSuccess, toast } from '../stores/toast';
 
 const props = defineProps({
   item: { type: Object, required: true }, // 完整 detail（含 todos / assets / related_items）
@@ -46,7 +47,23 @@ watch(
   { immediate: true }
 );
 
-onBeforeUnmount(flushSave);
+onBeforeUnmount(() => {
+  flushSave();
+  unsubLive();
+});
+
+// v2.3：订阅 jobs/todos SSE——任务状态推进（awaiting_user/完成）实时刷新进度面板
+let liveTimer = null;
+const unsubLive = subscribeLive((evt) => {
+  if (!props.item?.id) return;
+  if (!['jobs', 'todos'].includes(evt.resource)) return;
+  clearTimeout(liveTimer);
+  liveTimer = setTimeout(() => {
+    fetchJobs({ item_id: props.item.id })
+      .then((res) => { jobs.value = res.jobs || []; })
+      .catch(() => {});
+  }, 400);
+});
 
 function queueSave(patch) {
   pendingFor ||= props.item?.id;
@@ -103,8 +120,33 @@ function autoGrow(el) {
   el.style.height = `${el.scrollHeight}px`;
 }
 
-const activeJob = computed(() => jobs.value.find((j) => ['pending', 'running', 'waiting_local'].includes(j.status)));
-const STEP_ICON = { done: '✓', running: '◐', failed: '✗', pending: '○' };
+const activeJob = computed(() => jobs.value.find((j) => ['pending', 'running', 'waiting_local', 'awaiting_user'].includes(j.status)));
+// v2.3 确认门：首个待确认任务（Inspector 出「批准/跳过」按钮）
+const awaitingJob = computed(() => jobs.value.find((j) => j.status === 'awaiting_user') || null);
+const approving = ref(false);
+const STEP_ICON = { done: '✓', running: '◐', failed: '✗', pending: '○', skipped: '⏭' };
+const SKILL_LABEL = {
+  tavily_search: '联网调研',
+  browser_screenshot: '网页截图',
+  gh_inspect: '仓库检查+Clone',
+  gh_search: 'GitHub 搜索',
+  agent_task: 'Agent 委派',
+};
+
+async function decide(action) {
+  if (!awaitingJob.value || approving.value) return;
+  approving.value = true;
+  try {
+    const res = await approveJob(awaitingJob.value.id, action);
+    jobs.value = [res.job, ...jobs.value.filter((j) => j.id !== res.job.id)];
+    if (action === 'approve') toastSuccess('已批准，Agent 接手执行 🤖');
+    else toast('已跳过该步', 'info');
+  } catch (e) {
+    toastError(e.message);
+  } finally {
+    approving.value = false;
+  }
+}
 
 async function rerun() {
   reprunning.value = true;
@@ -181,11 +223,14 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
         @input="queueSave({ summary: edit.summary })"
       />
 
-      <!-- v2.2 预处理任务进度：技能步骤逐项点亮 + 失败重跑 -->
+      <!-- v2.2 预处理任务进度：技能步骤逐项点亮 + 失败重跑；v2.3 确认门（批准/跳过） -->
       <section v-if="jobs.length" class="inspector__section">
         <h3>
-          🤖 Agent 预处理
-          <span v-if="activeJob" class="inspector__job-live">
+          🤖 Agent 任务
+          <span v-if="awaitingJob" class="inspector__job-live is-awaiting">
+            <span class="inspector__pulse is-awaiting" />{{ awaitingJob.current_step || '等你确认' }}
+          </span>
+          <span v-else-if="activeJob" class="inspector__job-live">
             <span class="inspector__pulse" />{{ activeJob.current_step || '进行中…' }}
           </span>
           <span v-else-if="jobs[0].status === 'failed'" class="timestamp">部分失败</span>
@@ -193,13 +238,20 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
         <div class="inspector__job">
           <div v-for="(l, i) in jobs[0].logs" :key="i" class="inspector__job-step" :class="`is-${l.status}`">
             <span class="inspector__job-icon">{{ STEP_ICON[l.status] || '○' }}</span>
-            <span class="inspector__job-name">{{ l.skill }}</span>
+            <span class="inspector__job-name">{{ SKILL_LABEL[l.skill] || l.skill }}</span>
             <span class="timestamp">{{ l.error ? l.error.slice(0, 40) : (l.result?.asset_url ? '已存截图' : '') }}</span>
           </div>
           <div v-for="s in jobs[0].skills_plan.slice(jobs[0].logs.length)" :key="s.skill" class="inspector__job-step is-pending">
-            <span class="inspector__job-icon">○</span>
-            <span class="inspector__job-name">{{ s.skill }}</span>
-            <span class="timestamp">{{ s.runtime === 'local' ? '待本地 Agent' : '排队中' }}</span>
+            <span class="inspector__job-icon">{{ s.needs_confirm ? '⏸' : '○' }}</span>
+            <span class="inspector__job-name">{{ SKILL_LABEL[s.skill] || s.skill }}</span>
+            <span class="timestamp">{{ s.needs_confirm ? '待你确认' : s.runtime === 'local' ? '待本地 Agent' : '排队中' }}</span>
+          </div>
+          <!-- v2.3 确认门：批准放行 / 跳过该步 -->
+          <div v-if="awaitingJob" class="inspector__confirm">
+            <button class="btn btn--sm inspector__confirm-yes" :disabled="approving" @click="decide('approve')">
+              ✅ 批准执行
+            </button>
+            <button class="btn btn--glass btn--sm" :disabled="approving" @click="decide('skip')">⏭ 跳过</button>
           </div>
           <button v-if="!activeJob" class="btn btn--glass btn--sm inspector__rerun" :disabled="reprunning" @click="rerun">
             {{ reprunning ? '启动中…' : '↻ 重新预处理' }}
@@ -455,9 +507,27 @@ const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.r
 .inspector__job-step.is-done { color: var(--accent-green); }
 .inspector__job-step.is-running { color: var(--accent-purple); }
 .inspector__job-step.is-failed { color: var(--accent-red); }
+.inspector__job-step.is-skipped { color: var(--text-muted); }
 .inspector__job-icon { width: 14px; text-align: center; }
 .inspector__job-name { flex: 1; }
 .inspector__rerun { align-self: flex-start; margin-top: var(--space-2); }
+
+/* v2.3 确认门：琥珀色高亮 + 批准/跳过按钮组 */
+.inspector__job-live.is-awaiting { color: var(--accent-orange); }
+.inspector__pulse.is-awaiting {
+  background: var(--accent-orange);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+}
+.inspector__confirm {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+.inspector__confirm-yes {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.28), rgba(16, 185, 129, 0.2));
+  border: 1px solid rgba(34, 197, 94, 0.4);
+  color: #86efac;
+}
 
 .inspector__assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--space-4); }
 .inspector__asset {

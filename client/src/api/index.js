@@ -99,6 +99,8 @@ export const fetchStats = () => api.get('/stats');
 // ===== v2.2：Agent 预处理任务 =====
 export const fetchJobs = (params) => api.get('/agent-jobs', params);
 export const reprocessItem = (itemId) => api.post(`/agent-jobs/reprocess/${itemId}`, {});
+// v2.3 确认门：批准 / 跳过 awaiting_user 的任务
+export const approveJob = (id, action) => api.post(`/agent-jobs/${id}/approve`, { action });
 export const fetchWeeklyReport = (refresh) => api.get('/weekly-report', refresh ? { refresh: 1 } : undefined);
 export const fetchWeeklyReports = () => api.get('/weekly-reports');
 export const fetchSettings = () => api.get('/settings');
