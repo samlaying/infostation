@@ -115,7 +115,7 @@ def cmd_todos(args: SimpleNamespace, cfg: Cfg) -> Any:
         return client.get("/api/v1/todos", cfg, **clean(
             view=args.view, category=args.category, priority=args.priority,
             status=args.status, source_item_id=args.source_item, line=args.line,
-            topic_id=args.topic,
+            topic_id=args.topic, assigned_agent=args.executor,
         ))
     if args.todos_cmd == "create":
         return client.post("/api/v1/todos", cfg, clean(
@@ -127,6 +127,7 @@ def cmd_todos(args: SimpleNamespace, cfg: Cfg) -> Any:
         body = clean(
             status=args.status, title=args.title, priority=args.priority,
             category=args.category, actual_deadline=args.deadline, line=args.line,
+            assigned_agent=args.assigned_agent, acceptance=args.acceptance,
         )
         if args.deadline is not None and args.deadline == "":
             body["actual_deadline"] = None  # 空串表示清除截止日期
@@ -208,6 +209,44 @@ def cmd_posts(args: SimpleNamespace, cfg: Cfg) -> Any:
 
 def _parse_ids(s: str | None) -> list[int] | None:
     return [int(x) for x in s.split(",") if x.strip()] if s else None
+
+
+# ---------- v2.3：jobs 任务命令组（确认门 + Agent 委派执行）----------
+
+ASSET_MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def cmd_jobs(args: SimpleNamespace, cfg: Cfg) -> Any:
+    """任务面板：查列表 / 待确认队列 / 批准 / 跳过 / AI Agent 认领与回传。"""
+    if args.jobs_cmd == "list":
+        return client.get("/api/v1/agent-jobs", cfg, **clean(
+            status=args.status, item_id=args.item, todo_id=args.todo, limit=args.limit,
+        ))
+    if args.jobs_cmd == "awaiting":
+        return client.get("/api/v1/agent-jobs", cfg, status="awaiting_user")
+    if args.jobs_cmd == "approve":
+        return client.post(f"/api/v1/agent-jobs/{args.id}/approve", cfg, {"action": "approve"})
+    if args.jobs_cmd == "skip":
+        return client.post(f"/api/v1/agent-jobs/{args.id}/approve", cfg, {"action": "skip"})
+    if args.jobs_cmd == "claim":
+        # AI Agent 会话认领：默认声明 agent 能力；返回的 step.params 即执行指令
+        return client.get("/api/v1/agent-jobs/claim", cfg, caps=args.caps or "agent")
+    if args.jobs_cmd == "complete":
+        if args.fail:
+            body = {"ok": False, "error": (args.result or "执行失败")[:300]}
+        else:
+            body = {"ok": True, "result": {"title": args.title or "", "report": args.result or ""}}
+        if args.asset:
+            ext = os.path.splitext(args.asset)[1].lower()
+            body["upload"] = {
+                "filename": os.path.basename(args.asset),
+                "mime": ASSET_MIME.get(ext, "image/png"),
+                "content_b64": _b64_file(args.asset),
+                "local_path": os.path.abspath(args.asset),
+            }
+        return client.post(f"/api/v1/agent-jobs/{args.job}/steps/{args.step}/complete", cfg, body)
+    return None
 
 
 def cmd_weekly(args: SimpleNamespace, cfg: Cfg) -> Any:
@@ -345,9 +384,23 @@ def _exec_gh_inspect(step: dict) -> dict:
     return result
 
 
+def _exec_gh_search(step: dict) -> dict:
+    """gh 搜索仓库：按 query 找相关开源实现，返回 top5 元信息（fullName/stars/description）。"""
+    query = (step.get("params") or {}).get("query") or (step.get("params") or {}).get("repo") or ""
+    if not query:
+        raise RuntimeError("gh_search 缺少 query 参数")
+    p = _sh(["gh", "search", "repos", query, "--json",
+             "fullName,description,stargazerCount,updatedAt", "--limit", "5"], timeout=60)
+    repos = json.loads(p.stdout)
+    return {"query": query, "repos": repos}
+
+
 LOCAL_SKILLS = {
     "browser_screenshot": _exec_browser_screenshot,
     "gh_inspect": _exec_gh_inspect,
+    "gh_search": _exec_gh_search,
+    # agent_task 不在此列：泛化委派任务由 AI Agent 会话执行
+    # （jobs claim --caps agent 认领 → 用自身技能完成后 jobs complete 回传报告）
 }
 
 
@@ -382,6 +435,8 @@ def cmd_worker(args: SimpleNamespace, cfg: Cfg) -> dict | None:
         out({"claimed": job["id"], "skill": step["skill"], "item": job["item_id"]})
         body: dict = {"ok": True}
         try:
+            if step["skill"] not in LOCAL_SKILLS:
+                raise RuntimeError(f"循环 worker 不支持技能 {step['skill']}（agent_task 请由 AI Agent 会话执行）")
             result = LOCAL_SKILLS[step["skill"]](step)
             body["result"] = {k: v for k, v in result.items() if k != "path"}
             if step["skill"] == "browser_screenshot" and result.get("path"):
@@ -481,6 +536,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--source-item", help="按来源卡片过滤")
     s.add_argument("--line", choices=["trial", "media"], help="按产品线过滤：trial=行动项 | media=内容工序")
     s.add_argument("--topic", type=int, help="按主题 id 过滤（v2）")
+    s.add_argument("--executor", dest="executor",
+                   help="v2.3 按承接人过滤：user=本人的 | agent=任一 Agent | search_agent/local_agent/content_agent")
     s = spp.add_parser("create", help="手动创建")
     s.add_argument("title")
     s.add_argument("--desc")
@@ -497,6 +554,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--category")
     s.add_argument("--deadline", help="YYYY-MM-DD；传空串清除")
     s.add_argument("--line", choices=["trial", "media"], help="切换产品线")
+    s.add_argument("--assigned-agent", dest="assigned_agent",
+                   choices=["user", "search_agent", "local_agent", "content_agent"],
+                   help="v2.3 换承接人（user=收回给本人）")
+    s.add_argument("--acceptance", help="v2.3 验收标准")
     s = spp.add_parser("delete", help="删除")
     s.add_argument("id")
 
@@ -597,6 +658,29 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--interval", type=float, default=8, help="轮询间隔秒数")
     sp.add_argument("--caps", help="强制声明能力（逗号分隔 browser,gh；默认自动探测 PATH）")
 
+    # jobs（v2.3 任务面板：确认门 + Agent 委派）
+    sp = sub.add_parser("jobs", help="Agent 任务：确认门批准/跳过 + AI Agent 认领委派任务")
+    spp = sp.add_subparsers(dest="jobs_cmd", required=True)
+    s = spp.add_parser("list", help="任务列表")
+    s.add_argument("--status", choices=["pending", "running", "awaiting_user", "waiting_local", "completed", "failed"])
+    s.add_argument("--item", help="按卡片 id 过滤")
+    s.add_argument("--todo", help="按源 TODO id 过滤")
+    s.add_argument("--limit", type=int)
+    spp.add_parser("awaiting", help="列出等你确认的任务（awaiting_user）")
+    s = spp.add_parser("approve", help="批准执行（放行给 Agent）")
+    s.add_argument("id", type=int)
+    s = spp.add_parser("skip", help="跳过该步骤（继续推进下一步）")
+    s.add_argument("id", type=int)
+    s = spp.add_parser("claim", help="认领一个任务（AI Agent 会话默认 caps=agent，拿 step.params 指令）")
+    s.add_argument("--caps", help="能力声明，默认 agent；也可 browser,gh")
+    s = spp.add_parser("complete", help="回传承领任务的执行结果")
+    s.add_argument("job", type=int)
+    s.add_argument("step", type=int)
+    s.add_argument("--result", help="执行报告文本（给用户看的结论）")
+    s.add_argument("--title", help="报告标题")
+    s.add_argument("--asset", help="可选产物文件路径（截图等，base64 上传）")
+    s.add_argument("--fail", action="store_true", help="标记为失败（--result 作为错误原因）")
+
     # backup
     sp = sub.add_parser("backup", help="数据管理")
     spp = sp.add_subparsers(dest="backup_cmd", required=True)
@@ -617,7 +701,7 @@ HANDLERS = {
     "items": cmd_items, "todos": cmd_todos, "stats": cmd_stats,
     "weekly": cmd_weekly, "settings": cmd_settings, "backup": cmd_backup,
     "topics": cmd_topics, "assets": cmd_assets, "posts": cmd_posts,
-    "worker": cmd_worker,
+    "worker": cmd_worker, "jobs": cmd_jobs,
 }
 
 

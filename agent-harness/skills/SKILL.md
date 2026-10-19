@@ -76,9 +76,9 @@ cli-anything-infostation process add "选题｜AI副业过程透明化" --line m
 
 | Command | Description |
 |---------|-------------|
-| `list [--view today/pending/done] [--category --priority --status --source-item --line --topic]` | 今日待办/全部/完成记录；`--line trial` 行动项、`--line media` 内容工序、`--topic` 按主题 |
-| `create <title> [--category --priority --deadline --source-item --line --desc]` | 手动创建（line 缺省继承来源卡片） |
-| `update <id> [--status done/in_progress/pending/archived --deadline ...]` | 完成/归档/改期/编辑（`--deadline ""` 清除） |
+| `list [--view today/pending/done] [--category --priority --status --source-item --line --topic --executor]` | 今日待办/全部/完成记录；`--line trial` 行动项、`--line media` 内容工序、`--topic` 按主题；v2.3 `--executor user(本人的)/agent(任一Agent)/search_agent/local_agent/content_agent` 按承接人过滤 |
+| `create <title> [--category --priority --deadline --source-item --line --desc --executor --acceptance]` | 手动创建（line 缺省继承来源卡片；v2.3 可指定承接人，agent 类就绪即自动派工） |
+| `update <id> [--status done/in_progress/pending/archived --deadline ... --assigned-agent ...]` | 完成/归档/改期/编辑（`--deadline ""` 清除）；v2.3 手动置 done 会触发放行下一条 agent-TODO + 续推复盘 |
 | `delete <id>` | 删除 |
 
 ### topics — 主题（v2：主题=目标，一等公民）
@@ -167,6 +167,32 @@ cli-anything-infostation posts update 1 --status published --url https://xhs.exa
 - 能力来源：`ego-browser`（真实登录态浏览器截图）、`gh`（repo 元信息 + README 安装命令 + Clone 到 `~/Workspace/trials/`，可用 `INFOSTATION_TRIALS_DIR` 改目录）
 - 网络注意：`gh` 走 shell 环境代理，按项目启动前 `export HTTPS_PROXY=...` 即可；ego 浏览器走自身代理设置
 - 前端会实时显示任务进度（呼吸灯），完成后卡片自动挂上截图/Clone 路径/调研简报徽章
+
+### jobs — Agent 任务面板（v2.3：确认门 + 委派执行）
+
+一句话录入后，「私秘」会把内容拆成**带承接人**的步骤链（`assigned_agent`）：
+`search_agent`（只读调研，自动执行）→ `local_agent` / `content_agent`（动手/内容，**卡确认门等你批准**）→ `user`（本人做）。
+动手类步骤会在 `awaiting_user` 状态等你决定，批准后由本地 Agent 执行，完成后系统**续推**下一步自动进 TODO。
+
+| Command | Description |
+|---------|-------------|
+| `jobs list [--status --item --todo --limit]` | 任务列表（status 含 `awaiting_user`） |
+| `jobs awaiting` | 列出等你确认的任务 |
+| `jobs approve <id>` | 批准执行（放行给 Agent） |
+| `jobs skip <id>` | 跳过该步骤，继续推进 |
+| `jobs claim [--caps agent]` | **AI Agent 会话**认领委派任务（agent_task）；返回 `step.params` 含 title/description/acceptance 执行指令 |
+| `jobs complete <job> <step> --result "报告" [--title t] [--asset 截图.png] [--fail]` | 回传执行结果（报告写进卡片 agent_note；--asset 产物 base64 上传；--result 作为失败原因配 --fail） |
+
+```bash
+# 确认门工作流（网页 Inspector 也可以点按钮，两入口等价）
+cli-anything-infostation jobs awaiting
+cli-anything-infostation jobs approve 12
+
+# AI Agent 会话执行委派任务
+cli-anything-infostation jobs claim                 # → {job, step, step_index}，step.params 是指令
+# ……用自身技能（ego-browser / ego-lite 等）完成任务……
+cli-anything-infostation jobs complete 12 0 --result "已注册并跑通 demo，截图见资产" --asset /tmp/demo.png
+```
 
 ## 典型 Agent 工作流
 
