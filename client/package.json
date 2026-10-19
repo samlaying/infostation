@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "marked": "^18.1.1",
     "pinia": "^2.2.2",
     "shaders": "^4.0.4",
     "vue": "^3.4.38",

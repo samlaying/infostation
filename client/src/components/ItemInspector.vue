@@ -3,10 +3,11 @@
 // 取代信息库右侧的统计侧栏（分类分布/标签云归数据看板管，MECE）。
 // 职责：深读选中卡片 —— 正文、Agent 截图/生图资产、名下 TODO 直接打勾、关联跳转、
 // v2.2 预处理任务进度（技能步骤 ✓/○/✗ + 重跑）。
-import { computed, ref, reactive, watch, onBeforeUnmount } from 'vue';
+import { computed, ref, reactive, watch, onBeforeUnmount, nextTick } from 'vue';
+import { marked } from 'marked';
 import { useTodosStore } from '../stores/todos';
 import { PLATFORM_MAP, PRIORITY_MAP, FORM_MAP, itemForm, timeAgo, fmtDate } from '../constants';
-import { fetchJobs, reprocessItem, patchItem, approveJob } from '../api';
+import { fetchJobs, reprocessItem, patchItem, approveJob, createTodo } from '../api';
 import { subscribeLive } from '../api/live';
 import { toastError, toastSuccess, toast } from '../stores/toast';
 
@@ -33,6 +34,8 @@ watch(
   () => props.item?.id,
   (id) => {
     jobs.value = [];
+    viewer.asset = null;
+    closeSelMenu();
     if (id) {
       fetchJobs({ item_id: id })
         .then((res) => { jobs.value = res.jobs || []; })
@@ -179,6 +182,126 @@ const isImgUrl = (url) => /\.(png|jpe?g|webp|gif)$/i.test(url || '');
 const previewAssets = computed(() => (props.item.assets || []).filter((a) => a.remote_url && isImgUrl(a.remote_url)));
 const fileAssets = computed(() => (props.item.assets || []).filter((a) => a.remote_url && !isImgUrl(a.remote_url)));
 const fileIcon = (a) => (/\.pdf$/i.test(a.remote_url) ? '📕' : /\.json|\.csv$/i.test(a.remote_url) ? '📊' : /\.md|\.txt|\.html$/i.test(a.remote_url) ? '📄' : '📦');
+const assetName = (a) =>
+  a.metadata?.filename ||                              // 上传时的原始文件名（优先）
+  (a.prompt && !a.prompt.startsWith('preexec:') ? a.prompt : '') ||  // 非 preexec 的说明文字
+  a.remote_url.split('/').pop();                       // 兜底：站内文件名
+
+// ===== v2.3.2 产物内嵌阅读器：Inspector 内渲染 markdown，不开新窗口 =====
+const viewer = reactive({ asset: null, html: '', loading: false, error: '' });
+const viewerBody = ref(null);
+
+/** 自家 Agent 产物，防御性清洗后交给 marked 渲染（gfm 表格 + 换行转 <br>） */
+function renderMd(md) {
+  const html = marked.parse(String(md || ''), { breaks: true, gfm: true });
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*')/gi, '')
+    .replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1="#"');
+}
+
+async function toggleViewer(a) {
+  if (viewer.asset?.id === a.id) {
+    viewer.asset = null;
+    return;
+  }
+  viewer.asset = a;
+  viewer.loading = true;
+  viewer.error = '';
+  closeSelMenu();
+  try {
+    const res = await fetch(a.remote_url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    viewer.html = renderMd(await res.text());
+  } catch (e) {
+    viewer.error = `读取失败：${e.message}`;
+  }
+  viewer.loading = false;
+  nextTick(() => {
+    // 渲染后的链接一律新窗口打开（不冲掉 InfoStation 页面）
+    viewerBody.value?.querySelectorAll('a[href]').forEach((el) => {
+      el.target = '_blank';
+      el.rel = 'noopener';
+    });
+  });
+}
+
+// ===== v2.3.2 选中感知：划选产物文字 → 浮动菜单（出处 + 一键变要点/TODO/笔记）=====
+const selMenu = reactive({ show: false, x: 0, y: 0, text: '', file: '', section: '' });
+
+function closeSelMenu() {
+  selMenu.show = false;
+}
+
+function sectionOf(node) {
+  let el = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  while (el && el !== viewerBody.value) {
+    if (/^H[1-6]$/.test(el.tagName)) return el.textContent.trim().slice(0, 30);
+    el = el.parentElement;
+  }
+  return '';
+}
+
+function onSelect(ev) {
+  const sel = window.getSelection();
+  const text = sel?.toString().trim() || '';
+  if (!text || text.length < 2 || !viewerBody.value?.contains(sel.anchorNode)) {
+    closeSelMenu();
+    return;
+  }
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  selMenu.text = text.slice(0, 300);
+  selMenu.file = assetName(viewer.asset || {});
+  selMenu.section = sectionOf(sel.anchorNode);
+  selMenu.x = Math.min(rect.left + rect.width / 2, window.innerWidth - 150);
+  selMenu.y = rect.top - 8 + window.scrollY;
+  selMenu.show = true;
+}
+
+async function addAsPoint() {
+  try {
+    edit.points.push(selMenu.text.slice(0, 200));
+    savePoints();
+    toastSuccess('已加入要点 ✓');
+    closeSelMenu();
+    window.getSelection()?.removeAllRanges();
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
+async function addAsTodo() {
+  try {
+    await createTodo({
+      title: selMenu.text.slice(0, 40),
+      description: `摘自《${selMenu.file}》${selMenu.section ? ` · ${selMenu.section}` : ''}`,
+      source_item_id: props.item.id,
+      line: props.item.line,
+      topic_id: props.item.topic_id,
+      category: props.item.primary_category,
+    });
+    toastSuccess('已生成 TODO ✓');
+    closeSelMenu();
+    window.getSelection()?.removeAllRanges();
+  } catch (e) {
+    toastError(e.message);
+  }
+}
+
+async function addAsNote() {
+  try {
+    const src = `📌 摘记（摘自《${selMenu.file}》${selMenu.section ? ` · ${selMenu.section}` : ''}）：${selMenu.text.slice(0, 200)}`;
+    const note = `${props.item.agent_note ? props.item.agent_note + '\n\n' : ''}${src}`;
+    await patchItem(props.item.id, { agent_note: note.slice(0, 4000) });
+    props.item.agent_note = note.slice(0, 4000);
+    toastSuccess('已加入卡片笔记 ✓');
+    closeSelMenu();
+    window.getSelection()?.removeAllRanges();
+  } catch (e) {
+    toastError(e.message);
+  }
+}
 </script>
 
 <template>
@@ -283,15 +406,32 @@ const fileIcon = (a) => (/\.pdf$/i.test(a.remote_url) ? '📕' : /\.json|\.csv$/
             v-for="a in fileAssets"
             :key="`file-${a.id}`"
             class="inspector__file"
+            :class="{ 'is-active': viewer.asset?.id === a.id }"
             :href="a.remote_url"
-            target="_blank"
-            rel="noopener"
-            :title="`${a.asset_type} · 点击查看/下载${a.prompt ? ' · ' + a.prompt : ''}`"
+            :title="`阅读：${assetName(a)}`"
+            @click.prevent="toggleViewer(a)"
           >
             <span class="inspector__file-icon">{{ fileIcon(a) }}</span>
-            <span class="inspector__file-name">{{ (a.prompt || '').replace(/^preexec:/, '') || a.remote_url.split('/').pop() }}</span>
-            <span class="inspector__file-open">查看 ↗</span>
+            <span class="inspector__file-name">{{ assetName(a) }}</span>
+            <span class="inspector__file-open">{{ viewer.asset?.id === a.id ? '收起 ▴' : '阅读 ▾' }}</span>
           </a>
+        </div>
+        <!-- v2.3.2 内嵌阅读器：markdown 渲染 + 选中感知（→要点/TODO/笔记） -->
+        <div v-if="viewer.asset" class="inspector__viewer">
+          <header class="inspector__viewer-head">
+            <span>{{ fileIcon(viewer.asset) }} {{ assetName(viewer.asset) }}</span>
+            <button class="inspector__viewer-close" title="收起" @click="viewer.asset = null">✕</button>
+          </header>
+          <div v-if="viewer.loading" class="inspector__viewer-hint">读取中…</div>
+          <div v-else-if="viewer.error" class="inspector__viewer-hint">{{ viewer.error }}</div>
+          <div
+            v-else
+            ref="viewerBody"
+            class="inspector__md"
+            v-html="viewer.html"
+            @mouseup="onSelect"
+          />
+          <footer class="inspector__viewer-hint">划选文字 → 一键添加为要点 / TODO / 笔记</footer>
         </div>
         <div
           v-for="a in (item.assets || []).filter((x) => !x.remote_url)"
@@ -351,6 +491,23 @@ const fileIcon = (a) => (/\.pdf$/i.test(a.remote_url) ? '📕' : /\.json|\.csv$/
       </section>
 
       <div v-if="item.agent_note" class="inspector__note">🤖 {{ item.agent_note }}</div>
+    </div>
+
+    <!-- v2.3.2 划选浮动菜单：感知出处，一键添加 -->
+    <div
+      v-if="selMenu.show"
+      class="inspector__selmenu"
+      :style="{ left: selMenu.x + 'px', top: selMenu.y + 'px' }"
+      @mousedown.prevent
+    >
+      <div class="inspector__selmenu-src">
+        摘自 {{ selMenu.file }}<template v-if="selMenu.section"> · {{ selMenu.section }}</template>
+      </div>
+      <div class="inspector__selmenu-actions">
+        <button title="加入卡片要点" @click="addAsPoint">→ 要点</button>
+        <button title="生成一条 TODO（继承卡片线/主题）" @click="addAsTodo">→ TODO</button>
+        <button title="追加到卡片笔记" @click="addAsNote">→ 笔记</button>
+      </div>
     </div>
   </aside>
 </template>
@@ -588,6 +745,122 @@ const fileIcon = (a) => (/\.pdf$/i.test(a.remote_url) ? '📕' : /\.json|\.csv$/
 .inspector__file-icon { font-size: 15px; }
 .inspector__file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inspector__file-open { color: var(--accent-cyan); white-space: nowrap; }
+.inspector__file.is-active {
+  border-color: rgba(6, 182, 212, 0.4);
+  background: rgba(6, 182, 212, 0.08);
+}
+
+/* v2.3.2 内嵌阅读器：md 渲染排版 */
+.inspector__viewer {
+  margin-top: var(--space-4);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-faint);
+  overflow: hidden;
+}
+.inspector__viewer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  font: var(--font-micro);
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--glass-border);
+}
+.inspector__viewer-close {
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.inspector__viewer-close:hover { color: var(--text-primary); background: var(--glass-hover); }
+.inspector__viewer-hint {
+  padding: var(--space-3) var(--space-5);
+  font: var(--font-micro);
+  color: var(--text-muted);
+}
+.inspector__md {
+  max-height: 480px;
+  overflow-y: auto;
+  padding: var(--space-5);
+  font: var(--font-body);
+  color: var(--text-primary);
+  line-height: 1.65;
+}
+.inspector__md :deep(h1) { font: var(--font-h3); margin: var(--space-6) 0 var(--space-3); }
+.inspector__md :deep(h1:first-child) { margin-top: 0; }
+.inspector__md :deep(h2) { font: var(--font-h4); margin: var(--space-5) 0 var(--space-3); }
+.inspector__md :deep(h3), .inspector__md :deep(h4) { font: var(--font-body); font-weight: 650; margin: var(--space-4) 0 var(--space-2); }
+.inspector__md :deep(p) { margin: var(--space-3) 0; }
+.inspector__md :deep(ul), .inspector__md :deep(ol) { margin: var(--space-3) 0; padding-left: 1.4em; }
+.inspector__md :deep(li) { margin: var(--space-1) 0; }
+.inspector__md :deep(blockquote) {
+  margin: var(--space-4) 0;
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--accent-cyan);
+  color: var(--text-secondary);
+  background: rgba(6, 182, 212, 0.05);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+}
+.inspector__md :deep(code) {
+  font-family: ui-monospace, monospace;
+  font-size: 0.9em;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: rgba(148, 163, 184, 0.15);
+}
+.inspector__md :deep(pre) { padding: var(--space-4); overflow-x: auto; border-radius: var(--radius-sm); background: rgba(148, 163, 184, 0.1); }
+.inspector__md :deep(pre code) { padding: 0; background: none; }
+.inspector__md :deep(table) { border-collapse: collapse; margin: var(--space-4) 0; width: 100%; font-size: 0.88em; }
+.inspector__md :deep(th), .inspector__md :deep(td) {
+  border: 1px solid var(--glass-border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+.inspector__md :deep(th) { background: rgba(148, 163, 184, 0.1); font-weight: 600; }
+.inspector__md :deep(hr) { border: none; border-top: 1px solid var(--glass-border); margin: var(--space-5) 0; }
+.inspector__md :deep(a) { color: var(--accent-cyan); }
+.inspector__md ::selection { background: rgba(6, 182, 212, 0.3); }
+
+/* v2.3.2 划选浮动菜单 */
+.inspector__selmenu {
+  position: absolute;
+  z-index: 60;
+  transform: translate(-50%, -100%);
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border-hover);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  min-width: 200px;
+}
+.inspector__selmenu-src {
+  font: var(--font-micro);
+  color: #94a3b8;
+  margin-bottom: var(--space-2);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inspector__selmenu-actions { display: flex; gap: var(--space-2); }
+.inspector__selmenu-actions button {
+  padding: 4px 10px;
+  border-radius: var(--radius-xs);
+  font: var(--font-micro);
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+.inspector__selmenu-actions button:hover {
+  background: rgba(6, 182, 212, 0.25);
+  border-color: rgba(6, 182, 212, 0.5);
+  color: #fff;
+}
 
 .inspector__points {
   list-style: none;

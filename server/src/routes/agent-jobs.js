@@ -84,7 +84,11 @@ function saveUpload(itemId, upload, assetType, meta = {}) {
       `/uploads/${fname}`,
       meta.source_url || null,
       meta.prompt || null,
-      JSON.stringify(meta.metadata || {})
+      JSON.stringify({
+        ...(meta.metadata || {}),
+        filename: upload.filename || null, // 原始文件名（产物展示用）
+        mime: upload.mime || null,
+      })
     );
   broadcast('assets', 'create', itemId);
   return rowToAsset(db.prepare('SELECT * FROM assets WHERE id = ?').get(Number(info.lastInsertRowid)));
