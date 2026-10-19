@@ -10,6 +10,7 @@ import {
   isValidPostStatus,
 } from '../constants.js';
 import { broadcast } from '../services/events.js';
+import { requestAssets } from '../orchestrator/worker.js';
 
 export const assetsRouter = Router();
 export const postsRouter = Router();
@@ -32,6 +33,24 @@ assetsRouter.get('/assets', (req, res) => {
     .all(...params)
     .map(rowToAsset);
   res.json({ assets: rows });
+});
+
+// ---- v2.4：让 Agent 去配图（不弹输入框、不让人贴 URL）----
+// 派一条配图任务：本地 worker 截原页面 + AI Agent 生成/收集配图，完成后资产自动出现在卡片上。
+// body: { kind: 'ai_image' | 'screenshot' }
+assetsRouter.post('/assets/request', (req, res) => {
+  const { item_id, kind = 'ai_image' } = req.body || {};
+  if (!item_id || !db.prepare('SELECT id FROM items WHERE id = ?').get(item_id)) {
+    return res.status(400).json({ error: 'item_id 必须指向存在的卡片' });
+  }
+  if (!['ai_image', 'screenshot'].includes(kind)) {
+    return res.status(400).json({ error: 'kind 只能是 ai_image | screenshot' });
+  }
+  try {
+    res.status(201).json(requestAssets(item_id, kind));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 assetsRouter.post('/assets', (req, res) => {

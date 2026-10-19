@@ -15,12 +15,13 @@ export const agentRouter = Router();
 agentRouter.get('/agent/capabilities', (req, res) => {
   res.json({
     name: 'InfoStation',
-    version: '0.3.0',
+    version: '0.4.0',
     description:
       'AI 驱动的个人信息处理中枢：录入 → Agent 清洗/分类/TODO 提取 → 知识卡片与行动清单。' +
       '双线设计：trial(TODO线，值得试的东西→行动) / media(自媒体线，话题素材→内容生产)。' +
       'v2.0 数据模型：topics(主题=目标，一等公民) → items(素材→选题→发布包血缘树) → assets(截图/生图) → posts(多平台帖子与发布回执)。' +
-      'v2.3 智能派工：一句话 → 带承接人(assigned_agent)的步骤链 → search_agent 自动调研 → local/content_agent 卡确认门(awaiting_user) → 批准执行 → 完成后续推下一步',
+      'v2.3 智能派工：一句话 → 带承接人(assigned_agent)的步骤链 → search_agent 自动调研 → local/content_agent 卡确认门(awaiting_user) → 批准执行 → 完成后续推下一步' +
+      '。v2.4 配图：POST /assets/request 派 Agent 出图（截图原页面 + AI 生成/收集），资产自动入库，人不再手贴 URL',
     auth: process.env.API_TOKEN
       ? { required: true, header: 'Authorization: Bearer <token> 或 X-API-Key: <token>' }
       : { required: false, note: '未配置 API_TOKEN，接口开放（本地开发模式）' },
@@ -135,6 +136,12 @@ agentRouter.get('/agent/capabilities', (req, res) => {
         method: 'GET', path: '/api/v1/assets',
         summary: 'v2.0 资产列表（Agent 截图/生图/上传）',
         query: { item_id: '按卡片过滤', todo_id: '按工序过滤', type: 'enum(asset_types)' },
+      },
+      {
+        method: 'POST', path: '/api/v1/assets/request',
+        summary: 'v2.4 派 Agent 配图（用户点「让 Agent 配图」触发；本地 worker 截图 + AI Agent 生成/收集，完成后资产自动入库）',
+        body: { item_id: 'string 必填', kind: "ai_image | screenshot（默认 ai_image）" },
+        returns: '{ job, reused }——同卡已有进行中的配图任务时 reused=true',
       },
       {
         method: 'POST', path: '/api/v1/assets',

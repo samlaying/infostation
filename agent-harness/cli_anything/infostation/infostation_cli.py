@@ -176,6 +176,11 @@ def cmd_assets(args: SimpleNamespace, cfg: Cfg) -> Any:
             prompt=args.prompt,
             metadata=json.loads(args.metadata) if args.metadata else None,
         ))
+    if args.assets_cmd == "request":
+        # v2.4：派 Agent 去配图（本机截图 + AI Agent 生成/收集，完成后自动入资产区）
+        return client.post("/api/v1/assets/request", cfg, {
+            "item_id": args.item, "kind": args.kind,
+        })
     if args.assets_cmd == "update":
         body = clean(local_path=args.local, remote_url=args.url, prompt=args.prompt)
         if args.metadata:
@@ -627,6 +632,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--source", help="截图源网页 URL")
     s.add_argument("--prompt", help="AI 生图 Prompt")
     s.add_argument("--metadata", help='JSON 字符串，如 \'{"w":1080}\'')
+    s = spp.add_parser("request", help="派 Agent 配图（本机截图 + AI Agent 生成/收集，自动入资产区）")
+    s.add_argument("--item", required=True, help="所属卡片 id")
+    s.add_argument("--kind", default="ai_image", choices=["ai_image", "screenshot"],
+                   help="ai_image=生图/收集（默认，有源链接先截原页面）；screenshot=只截原页面")
     s = spp.add_parser("update", help="更新（如上传后回填 --url）")
     s.add_argument("id", type=int)
     s.add_argument("--local")

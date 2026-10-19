@@ -102,6 +102,7 @@ cli-anything-infostation items update <item_id> --topic <topic_id>
 | Command | Description |
 |---------|-------------|
 | `list [--item --todo --type screenshot/ai_image/upload/video]` | 按卡片/工序/类型过滤 |
+| `request --item <id> [--kind ai_image/screenshot]` | **v2.4 派 Agent 配图**：有源链接先由 worker 截原页面，再委派 AI Agent 生成/收集配图；完成后资产自动入库（人不用贴 URL） |
 | `add --item <id> --type <t> [--local 路径 --url 图床URL --source 源网页 --prompt 生图提示词 --todo 工序id --metadata JSON]` | 登记资产（local/url 至少一个） |
 | `update <id> [--local --url --prompt --metadata]` | 更新（典型：上传图床后回填 `--url`） |
 | `delete <id>` | 删除记录 |
@@ -201,7 +202,7 @@ cli-anything-infostation jobs complete 12 0 --result "已注册并跑通 demo" -
 ## 典型 Agent 工作流
 
 ```bash
-# 1. 探测能力（v2.0：31 个端点，含 topics/assets/posts）
+# 1. 探测能力（v2.0+：37 个端点，含 topics/assets/posts/agent-jobs）
 cli-anything-infostation agent capabilities
 
 # 2. 录入今天刷到的内容（Agent 自动分类+提取TODO+绑主题）

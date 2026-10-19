@@ -107,7 +107,11 @@ agentJobsRouter.post('/agent-jobs/:id/steps/:idx/complete', (req, res) => {
       const step = JSON.parse(
         db.prepare('SELECT skills_plan FROM agent_jobs WHERE id = ?').get(Number(req.params.id)).skills_plan
       )[Number(req.params.idx)];
-      asset = saveUpload(job.item_id, upload, step?.skill === 'browser_screenshot' ? 'screenshot' : 'upload', {
+      // v2.4：配图请求按声明的 asset_type 归类（截图/生图），其余沿用技能推断
+      const assetType = ['screenshot', 'ai_image'].includes(step?.params?.asset_type)
+        ? step.params.asset_type
+        : step?.skill === 'browser_screenshot' ? 'screenshot' : 'upload';
+      asset = saveUpload(job.item_id, upload, assetType, {
         source_url: step?.params?.url,
         prompt: `preexec:${step?.skill}`,
       });

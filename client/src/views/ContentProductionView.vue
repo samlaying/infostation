@@ -2,13 +2,14 @@
 // ===== 内容生产（自媒体线）· v2.1 状态机流水线 =====
 // MECE：本视图只管 media 线。选题卡是流水线母卡，内嵌工序与资产，四状态各配唯一主 CTA：
 //   A 无工序 → ⚡ 拆解工序（生成模板子工序）
-//   B 工序进行中 → 勾工序 + 🖼 挂载图片资产（截图/生图入 assets 表）
+//   B 工序进行中 → 勾工序 + 🖼 让 Agent 配图（本地 worker 截图 + AI Agent 生成/收集，自动入 assets）
 //   C 工序齐备 → 📦 生成发布包（写 posts 表，带文案+配图引用）
 //   D 发布包待发 → 📋 复制文案 / ✅ 标为已发布（回执链接）
 import { ref, computed, onMounted } from 'vue';
 import {
   fetchItems, fetchItem, fetchTodos, patchTodo, patchItem, createTodo,
-  fetchAssets, createAsset, fetchPosts, createPost, patchPost, processInput,
+  fetchAssets, fetchPosts, createPost, patchPost, processInput,
+  fetchJobs, requestAssets,
 } from '../api';
 import { LINE_MAP, POST_PLATFORM_MAP, POST_STATUS_MAP, timeAgo } from '../constants';
 import ItemDetailModal from '../components/ItemDetailModal.vue';
@@ -21,6 +22,8 @@ const posts = ref([]);          // 发布包（posts 表）
 const workflows = ref([]);      // 待推进工序（line=media pending）
 const doneFlows = ref([]);      // 已完成工序（计数用）
 const assetsByItem = ref({});   // item_id → assets[]
+const assetJobsByItem = ref({}); // item_id → 进行中的配图任务
+const requestingFor = ref(null); // 正在派工的选题 id
 const loading = ref(true);
 const detailItem = ref(null);
 const tab = ref('pipeline');    // pipeline | packages
@@ -30,12 +33,13 @@ const newFlowTitle = ref('');
 async function load() {
   loading.value = true;
   try {
-    const [ideaRes, postRes, wfRes, doneRes, assetRes] = await Promise.all([
+    const [ideaRes, postRes, wfRes, doneRes, assetRes, jobRes] = await Promise.all([
       fetchItems({ form: 'idea', line: 'media', page_size: 60 }),
       fetchPosts({}),
       fetchTodos({ view: 'pending', line: 'media' }),
       fetchTodos({ view: 'done', line: 'media' }),
       fetchAssets({}),
+      fetchJobs({ limit: 60 }).catch(() => ({ jobs: [] })),
     ]);
     ideas.value = ideaRes.items || [];
     posts.value = (postRes.posts || []).slice().sort((a, b) => b.id - a.id);
@@ -44,6 +48,14 @@ async function load() {
     const map = {};
     for (const a of assetRes.assets || []) (map[a.item_id] ||= []).push(a);
     assetsByItem.value = map;
+    // 配图任务：只留进行中的（完成后资产已入库，无需再挂状态）
+    const jobs = {};
+    for (const j of jobRes.jobs || []) {
+      if (!['pending', 'running', 'waiting_local', 'awaiting_user'].includes(j.status)) continue;
+      if (!(j.skills_plan || []).some((s) => s.params?.asset_request)) continue;
+      (jobs[j.item_id] ||= []).push(j);
+    }
+    assetJobsByItem.value = jobs;
   } catch (e) {
     toastError(e.message);
   } finally {
@@ -52,8 +64,8 @@ async function load() {
 }
 onMounted(load);
 
-// SSE：任何一环变更后自动重拉
-useLiveReload(load, ['items', 'todos', 'posts', 'assets']);
+// SSE：任何一环变更后自动重拉（jobs 也要，配图任务完成时资产才出现）
+useLiveReload(load, ['items', 'todos', 'posts', 'assets', 'jobs']);
 
 const pendingByItem = computed(() => groupBy(workflows.value));
 const doneByItem = computed(() => groupBy(doneFlows.value));
@@ -121,15 +133,34 @@ async function addFlow(it) {
   }
 }
 
-// ---- 状态 B：挂载图片资产（本地 Agent 截图/生图后登记，或直接贴图床 URL） ----
-async function attachAsset(it, presetType = 'upload') {
-  const url = prompt('贴入图片 URL（本地 Agent 截图/生图上传图床后的链接）：');
-  if (!url || !/^https?:\/\//.test(url.trim())) return;
+// ---- 状态 B：让 Agent 配图（不弹输入框、不需要人贴 URL）----
+// 派工后：本地 worker 截原页面 → AI Agent 生成/收集配图 → 上传成卡片资产，SSE 自动刷新缩略图。
+const ASSET_JOB_STATUS = {
+  pending: '排队中',
+  running: 'Agent 正在制作',
+  waiting_local: '等待本地 Agent 接单',
+  awaiting_user: '等你确认',
+};
+function assetJobOf(it) {
+  return (assetJobsByItem.value[it.id] || [])[0] || null;
+}
+// 缩略图 tooltip：优先原始文件名，其次资产类型中文名（prompt 里的 preexec:xxx 是技能名，不适合展示）
+const ASSET_KIND_LABEL = { screenshot: '截图', ai_image: '生图', upload: '上传', video: '视频' };
+function assetLabel(a) {
+  return a.metadata?.filename || ASSET_KIND_LABEL[a.asset_type] || a.asset_type;
+}
+async function requestAssetForAgent(it, kind = 'ai_image') {
+  if (requestingFor.value) return;
+  requestingFor.value = it.id;
   try {
-    await createAsset({ item_id: it.id, asset_type: presetType, remote_url: url.trim() });
-    toastSuccess('资产已挂载 🖼');
+    const res = await requestAssets(it.id, kind);
+    if (res?.reused) toastSuccess('这个选题已有配图任务在进行中');
+    else toastSuccess('已派给 Agent 配图，完成后自动出现在这里 🖼');
+    await load();
   } catch (e) {
     toastError(e.message);
+  } finally {
+    requestingFor.value = null;
   }
 }
 
@@ -267,15 +298,25 @@ async function createTopic() {
             <p class="pipeline__summary">{{ it.summary }}</p>
           </header>
 
-          <!-- 资产槽：Agent 截图 / 生图缩略图 + 挂载入口 -->
+          <!-- 资产槽：Agent 截图 / 生图缩略图 + 派工入口 -->
           <div class="pipeline__assets">
             <template v-for="a in assetsOf(it).slice(0, 6)" :key="a.id">
-              <a v-if="a.remote_url" class="pipeline__asset" :href="a.remote_url" target="_blank" rel="noopener" :title="a.prompt || a.asset_type">
+              <a v-if="a.remote_url" class="pipeline__asset" :href="a.remote_url" target="_blank" rel="noopener" :title="assetLabel(a)">
                 <img :src="a.remote_url" loading="lazy" alt="" />
               </a>
               <span v-else class="pipeline__asset pipeline__asset--local" :title="a.local_path">📎</span>
             </template>
-            <button class="pipeline__asset-add" title="挂载截图/生图（贴图床 URL 入 assets 表）" @click="attachAsset(it, 'upload')">＋ 图片</button>
+            <div v-if="assetJobOf(it)" class="pipeline__asset pipeline__asset--pending" :title="assetJobOf(it).current_step">
+              <span class="spinner" />
+              <span>{{ ASSET_JOB_STATUS[assetJobOf(it).status] || '处理中' }}</span>
+            </div>
+            <button
+              v-else
+              class="pipeline__asset-add"
+              title="派 Agent 去配图（本机截图 + AI 生成/收集，自动上传）"
+              :disabled="requestingFor === it.id"
+              @click="requestAssetForAgent(it, 'ai_image')"
+            >{{ requestingFor === it.id ? '派工中…' : '＋ 图片' }}</button>
           </div>
 
           <!-- 子列表：内嵌工序（可直接勾） -->
@@ -312,7 +353,18 @@ async function createTopic() {
             </template>
             <template v-else-if="stageOf(it) === 'B'">
               <span class="pipeline__hint">工序 {{ (doneByItem[it.id] || []).length }}/{{ flowsOf(it).length }} · 配图 {{ assetsOf(it).length }} 张</span>
-              <button class="btn btn--glass pipeline__btn" @click="attachAsset(it, 'ai_image')">🖼 挂载配图</button>
+              <button
+                v-if="assetJobOf(it)"
+                class="btn btn--glass pipeline__btn"
+                disabled
+              >🖼 {{ ASSET_JOB_STATUS[assetJobOf(it).status] || '配图中' }}…</button>
+              <button
+                v-else
+                class="btn btn--glass pipeline__btn"
+                :disabled="requestingFor === it.id"
+                title="让本地 Agent 截图 + AI Agent 生成/收集配图并自动上传"
+                @click="requestAssetForAgent(it, 'ai_image')"
+              >{{ requestingFor === it.id ? '派工中…' : '🖼 让 Agent 配图' }}</button>
               <button class="btn btn--glass pipeline__btn" :disabled="!assetsOf(it).length" title="工序勾完后可打包" @click="makePackage(it)">📦 生成发布包</button>
             </template>
             <template v-else>
@@ -459,12 +511,18 @@ async function createTopic() {
 }
 .pipeline__asset img { width: 100%; height: 100%; object-fit: cover; }
 .pipeline__asset--local { border-style: dashed; color: var(--text-muted); }
+.pipeline__asset--pending {
+  flex-direction: column; gap: 2px; border-style: dashed;
+  color: var(--text-secondary); font: var(--font-micro); text-align: center; padding: 2px;
+}
+.pipeline__asset--pending .spinner { width: 12px; height: 12px; }
 .pipeline__asset-add {
   width: 72px; height: 54px; flex-shrink: 0; border-radius: var(--radius-sm);
   border: 1.5px dashed var(--glass-border-hover); color: var(--text-muted);
   font: var(--font-micro); transition: all var(--transition-fast);
 }
-.pipeline__asset-add:hover { color: var(--line-media); border-color: var(--line-media); background: color-mix(in srgb, var(--line-media) 8%, transparent); }
+.pipeline__asset-add:hover:not(:disabled) { color: var(--line-media); border-color: var(--line-media); background: color-mix(in srgb, var(--line-media) 8%, transparent); }
+.pipeline__asset-add:disabled { opacity: 0.6; cursor: default; }
 
 /* 内嵌工序 */
 .pipeline__flows { display: flex; flex-direction: column; gap: var(--space-2); }

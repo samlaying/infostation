@@ -86,6 +86,8 @@ export const deleteTopic = (id) => api.delete(`/topics/${id}`);
 
 export const fetchAssets = (params) => api.get('/assets', params);
 export const createAsset = (body) => api.post('/assets', body);
+// v2.4：派 Agent 去配图（本地 worker 截图 + AI Agent 生成/收集，完成后自动入资产区）
+export const requestAssets = (itemId, kind = 'ai_image') => api.post('/assets/request', { item_id: itemId, kind });
 export const patchAsset = (id, body) => api.patch(`/assets/${id}`, body);
 export const deleteAsset = (id) => api.delete(`/assets/${id}`);
 

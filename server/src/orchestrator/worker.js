@@ -8,7 +8,7 @@
 
 import { db, rowToItem, rowToJob } from '../db.js';
 import { broadcast } from '../services/events.js';
-import { planFor, planTodoJob } from './planner.js';
+import { planFor, planTodoJob, planAssetRequest } from './planner.js';
 import { replanForItem } from '../services/planner-llm.js';
 import { tavilyConfigured, tavilySearch } from '../skills/tavily.js';
 
@@ -245,8 +245,36 @@ export function dispatchReadyTodos(itemId) {
   }
 }
 
-/** CLI worker 认领：找到第一个处于 waiting_local 且技能匹配其能力 caps 的 job 步 */
-export function claimLocalStep(caps = []) {
+/**
+ * v2.4：配图任务入口——用户点「🖼 配图」时派给 Agent，而不是让用户自己贴 URL。
+ * 有源链接先由本地 worker 截原页面，再委派 AI Agent 生成/收集配图并上传资产。
+ * 幂等：同卡已有进行中的配图任务则复用，避免连点重复派工。
+ */
+export function requestAssets(itemId, kind = 'ai_image') {
+  const item = rowToItem(db.prepare('SELECT * FROM items WHERE id = ?').get(itemId));
+  if (!item) throw new Error('卡片不存在');
+
+  const active = db
+    .prepare(`SELECT * FROM agent_jobs WHERE item_id = ?
+              AND status IN ('pending','running','waiting_local','awaiting_user') ORDER BY id DESC`)
+    .all(itemId)
+    .map(rowToJob)
+    .find((j) => j.skills_plan.some((s) => s.params?.asset_request));
+  if (active) return { job: active, reused: true };
+
+  const plan = planAssetRequest(item, kind);
+  const info = db
+    .prepare(`INSERT INTO agent_jobs (item_id, status, current_step, skills_plan, logs, created_at, updated_at)
+              VALUES (?, 'pending', ?, ?, '[]', ?, ?)`)
+    .run(itemId, `规划完成：${plan.map((p) => STEP_LABELS[p.skill]).join(' → ')}`,
+      JSON.stringify(plan), nowIso(), nowIso());
+  broadcast('jobs', 'create', itemId);
+  console.log(`[orchestrator] asset-job#${info.lastInsertRowid} 派发：${item.title.slice(0, 20)} (${kind})`);
+  setImmediate(() => advance(Number(info.lastInsertRowid)));
+  return { job: getJob(Number(info.lastInsertRowid)), reused: false };
+}
+
+/** CLI worker 认领：找到第一个处于 waiting_local 且技能匹配其能力 caps 的 job 步 */export function claimLocalStep(caps = []) {
   const rows = db
     .prepare(`SELECT * FROM agent_jobs WHERE status = 'waiting_local' ORDER BY id LIMIT 10`)
     .all();
@@ -372,7 +400,11 @@ function finish(job) {
     dispatchReadyTodos(job.item_id);
     replanForItem(job.item_id, 'job_done'); // fire-and-forget
   } else if (job.status === 'completed') {
-    appendAgentNote(job.item_id, `🤖 预处理完成（${doneN} 项技能）`);
+    const isAssetJob = job.skills_plan.some((s) => s.params?.asset_request);
+    appendAgentNote(job.item_id, isAssetJob ? `🖼 配图任务完成（${doneN} 项技能）` : `🤖 预处理完成（${doneN} 项技能）`);
+  } else {
+    const isAssetJob = job.skills_plan.some((s) => s.params?.asset_request);
+    if (isAssetJob) appendAgentNote(job.item_id, `⚠️ 配图任务失败：${job.error_msg || '未产出资产'}`);
   }
   console.log(`[orchestrator] job#${job.id} ${job.status}`);
 }

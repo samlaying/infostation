@@ -106,13 +106,16 @@ export function planFor(item) {
  * search 只读自动跑），与 LLM 输出无关。
  * @param {object} todo 含 assigned_agent/title/description/acceptance 的 TODO 行
  * @param {object} item 母卡片（source_url/title/line）
+ * @param {object} [opts]
+ * @param {boolean} [opts.skipConfirm] 用户已显式点按钮触发的任务，无需二次确认
+ * @param {object} [opts.extraParams] 附加到每步 params 的字段（如 asset_request/asset_kind）
  * @returns {{skill, params, runtime, needs_confirm?, reason}[]} 单 TODO 的执行计划
  */
-export function planTodoJob(todo, item) {
+export function planTodoJob(todo, item, opts = {}) {
   const agent = todo.assigned_agent;
   const text = `${todo.title} ${todo.description || ''}`;
   const url = item.source_url || '';
-  const confirm = agent !== 'search_agent'; // local/content 均需用户批准
+  const confirm = !opts.skipConfirm && agent !== 'search_agent'; // local/content 均需用户批准
   const steps = [];
 
   if (agent === 'search_agent') {
@@ -193,5 +196,57 @@ export function planTodoJob(todo, item) {
       reason: `内容 Agent 委派：${todo.title}`,
     });
   }
+  return steps;
+}
+
+/**
+ * v2.4：配图任务计划——「🖼 挂载配图」不再是让人贴 URL，
+ * 而是派给 Agent：有源链接先让本地 worker 截原页面，再委派 AI Agent 生成/收集配图。
+ * 该计划由用户点按钮直接触发，故不带 needs_confirm。
+ * @param {object} item 母卡片
+ * @param {'ai_image'|'screenshot'} kind 要的产物类型
+ */
+export function planAssetRequest(item, kind = 'ai_image') {
+  const url = item.source_url || '';
+  const brief = `为选题《${item.title}》准备配图。选题摘要：${(item.summary || '').slice(0, 200)}`;
+  const taskStep = (assetType) => ({
+    skill: 'agent_task',
+    runtime: 'local',
+    params: {
+      asset_request: assetType,
+      asset_type: assetType,
+      title: `为《${item.title}》制作配图`,
+      description: `${brief}\n要求：与主题一致、无水印、适合社媒首图（3:2 或 1:1）。`,
+      acceptance: '1-3 张配图已上传为卡片资产（jobs complete --asset）',
+      item_title: item.title,
+      item_summary: item.summary || '',
+      line: item.line,
+      source_url: url,
+    },
+    reason: assetType === 'ai_image' ? 'Agent 生成/收集配图并上传' : 'Agent 截取/整理配图并上传',
+  });
+
+  if (kind === 'screenshot') {
+    if (url) {
+      return [{
+        skill: 'browser_screenshot',
+        runtime: 'local',
+        params: { url, full: false, asset_request: 'screenshot', asset_type: 'screenshot' },
+        reason: '截取原页面作为配图',
+      }];
+    }
+    return [taskStep('screenshot')];
+  }
+
+  const steps = [];
+  if (url) {
+    steps.push({
+      skill: 'browser_screenshot',
+      runtime: 'local',
+      params: { url, full: false },
+      reason: '先截取原页面（配图参考）',
+    });
+  }
+  steps.push(taskStep('ai_image'));
   return steps;
 }
