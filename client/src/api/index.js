@@ -98,6 +98,13 @@ export const deletePost = (id) => api.delete(`/posts/${id}`);
 
 export const fetchStats = () => api.get('/stats');
 
+// ===== v2.5：主动推动（推荐流）=====
+export const fetchPush = (params) => api.get('/push', params);
+export const generatePush = (force = false) => api.post('/push/generate', { force });
+export const acceptPush = (id) => api.post(`/push/${id}/accept`, {});
+export const dismissPush = (id) => api.post(`/push/${id}/dismiss`, {});
+export const fetchEyewash = () => api.get('/push/eyewash');
+
 // ===== v2.2：Agent 预处理任务 =====
 export const fetchJobs = (params) => api.get('/agent-jobs', params);
 export const reprocessItem = (itemId) => api.post(`/agent-jobs/reprocess/${itemId}`, {});

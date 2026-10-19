@@ -15,13 +15,14 @@ export const agentRouter = Router();
 agentRouter.get('/agent/capabilities', (req, res) => {
   res.json({
     name: 'InfoStation',
-    version: '0.4.0',
+    version: '0.5.0',
     description:
       'AI 驱动的个人信息处理中枢：录入 → Agent 清洗/分类/TODO 提取 → 知识卡片与行动清单。' +
       '双线设计：trial(TODO线，值得试的东西→行动) / media(自媒体线，话题素材→内容生产)。' +
       'v2.0 数据模型：topics(主题=目标，一等公民) → items(素材→选题→发布包血缘树) → assets(截图/生图) → posts(多平台帖子与发布回执)。' +
       'v2.3 智能派工：一句话 → 带承接人(assigned_agent)的步骤链 → search_agent 自动调研 → local/content_agent 卡确认门(awaiting_user) → 批准执行 → 完成后续推下一步' +
-      '。v2.4 配图：POST /assets/request 派 Agent 出图（截图原页面 + AI 生成/收集），资产自动入库，人不再手贴 URL',
+      '。v2.4 配图：POST /assets/request 派 Agent 出图（截图原页面 + AI 生成/收集），资产自动入库，人不再手贴 URL' +
+      '。v2.5 主动推动：/push 推荐流——外部 AIHOT 精选 + 库内久未推进的卡/主题 + 今日洗眼睛站点（浸泡层），采纳后仍走 /process 主流水线',
     auth: process.env.API_TOKEN
       ? { required: true, header: 'Authorization: Bearer <token> 或 X-API-Key: <token>' }
       : { required: false, note: '未配置 API_TOKEN，接口开放（本地开发模式）' },
@@ -175,6 +176,25 @@ agentRouter.get('/agent/capabilities', (req, res) => {
         body: { title: 'string', content_body: 'string', asset_ids: 'number[]', platform: 'enum', status: 'enum(post_statuses)', published_url: 'string（发布成功后的线上链接）' },
       },
       { method: 'DELETE', path: '/api/v1/posts/:id', summary: 'v2.0 删除帖子' },
+      {
+        method: 'GET', path: '/api/v1/push',
+        summary: 'v2.5 主动推动：当前待处理推荐（外部 AIHOT 精选 / 库内久未推进的卡与主题 / 今日洗眼睛站点）',
+        query: { status: 'new | accepted | dismissed | expired | all（默认 new）', limit: '默认 30' },
+        returns: '{ suggestions: [...], eyewash: { main, edge, weekday } }；每条含 kind/title/reason/hook/score/payload',
+      },
+      {
+        method: 'POST', path: '/api/v1/push/generate',
+        summary: 'v2.5 生成一批推荐（force=true 忽略"今天已有未处理推荐"的幂等保护）',
+        body: { force: 'boolean' },
+        returns: '{ batch, created, skipped }',
+      },
+      {
+        method: 'POST', path: '/api/v1/push/:id/accept',
+        summary: 'v2.5 采纳建议 → 返回下一步动作（type=process/open_item/open_topic/open_url）；落库仍走 /process 或既有接口，推荐层不绕过主流水线',
+        returns: '{ suggestion, action }',
+      },
+      { method: 'POST', path: '/api/v1/push/:id/dismiss', summary: 'v2.5 忽略建议' },
+      { method: 'GET', path: '/api/v1/push/eyewash', summary: 'v2.5 今日洗眼睛站点（浸泡层 10 站轮换，主站+破圈站）' },
       {
         method: 'GET', path: '/api/v1/agent-jobs',
         summary: 'v2.2/2.3 任务列表（卡片预处理 + TODO 派工），Inspector 进度面板数据源',

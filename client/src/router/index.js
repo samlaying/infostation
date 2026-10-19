@@ -26,6 +26,12 @@ const routes = [
     meta: { title: '内容生产', icon: '✍️', group: 'core' },
   },
   {
+    path: '/push',
+    name: 'push',
+    component: () => import('../views/PushView.vue'),
+    meta: { title: '主动推动', icon: '🧭', group: 'core' },
+  },
+  {
     path: '/analytics',
     name: 'analytics',
     component: () => import('../views/AnalyticsView.vue'),

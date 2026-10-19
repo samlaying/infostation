@@ -215,6 +215,30 @@ if (jobsDdl && /CHECK\s*\(\s*status/i.test(jobsDdl.sql || '')) {
 db.exec(`UPDATE items SET updated_at = created_at WHERE updated_at = ''`);
 db.exec(`UPDATE todos SET updated_at = created_at WHERE updated_at = ''`);
 
+// ===== v2.5：主动推动（Proactive Push）=====
+// 推荐流不是另一套内容模型，而是「已经进库的素材」的再发现：
+// 每条 suggestion 尽量指向真实存在的 item；用户采纳后走既有 process / todo 流水线，
+// 绝不绕过它（推荐只负责"让你想起它"，不负责"替你做"）。
+db.exec(`
+CREATE TABLE IF NOT EXISTS push_suggestions (
+  id             TEXT PRIMARY KEY,
+  kind           TEXT NOT NULL DEFAULT 'item',   -- item(已有卡片再发现) | topic(主题推进) | eyewash(浸泡)
+  source_item_id TEXT REFERENCES items(id) ON DELETE CASCADE,
+  title          TEXT NOT NULL,
+  reason         TEXT NOT NULL DEFAULT '',       -- 为什么推给你（必须具体，不许空洞）
+  hook           TEXT NOT NULL DEFAULT '',       -- 一句话切入点
+  payload        TEXT NOT NULL DEFAULT '{}',     -- JSON：建议动作/关键词/站点等
+  score          REAL NOT NULL DEFAULT 0,
+  batch          TEXT NOT NULL DEFAULT '',       -- 生成批次
+  status         TEXT NOT NULL DEFAULT 'new',    -- new | accepted | dismissed | expired
+  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  acted_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_push_status     ON push_suggestions(status);
+CREATE INDEX IF NOT EXISTS idx_push_batch      ON push_suggestions(batch);
+CREATE INDEX IF NOT EXISTS idx_push_source     ON push_suggestions(source_item_id);
+`);
+
 db.exec(`
 CREATE INDEX IF NOT EXISTS idx_items_line       ON items(line);
 CREATE INDEX IF NOT EXISTS idx_todos_line       ON todos(line);
@@ -292,6 +316,12 @@ export function rowToAsset(row) {
 export function rowToPost(row) {
   if (!row) return null;
   return { ...row, asset_ids: JSON.parse(row.asset_ids || '[]') };
+}
+
+// ===== v2.5：主动推动建议行转换 =====
+export function rowToSuggestion(row) {
+  if (!row) return null;
+  return { ...row, payload: JSON.parse(row.payload || '{}') };
 }
 
 // ===== v2.2：预处理任务行转换 =====

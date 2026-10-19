@@ -19,6 +19,7 @@ import { topicsRouter } from './routes/topics.js';
 import { assetsRouter, postsRouter } from './routes/assets.js';
 import { eventsRouter } from './routes/events.js';
 import { agentJobsRouter, UPLOAD_DIR } from './routes/agent-jobs.js';
+import { pushRouter } from './routes/push.js';
 import { requireToken } from './middleware/auth.js';
 import { llmConfigured } from './services/agent.js';
 
@@ -46,6 +47,7 @@ api.use(settingsRouter);
 api.use(backupRouter);
 api.use(eventsRouter); // SSE 变更推送（GET /api/v1/events）
 api.use(agentJobsRouter); // v2.2 预处理任务：查询/本地 worker 认领与回传/重跑
+api.use(pushRouter); // v2.5 主动推动：外部发现 + 库内再发现 + 洗眼睛
 app.use('/api/v1', api);
 
 // v2.2：预处理产物（截图等）静态服务。挂在鉴权之外：<img> 无法带 header；
