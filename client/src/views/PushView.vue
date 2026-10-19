@@ -34,7 +34,7 @@ const KIND_MAP = {
 // 今日一句的草稿（本地暂存，不进数据库——它属于训练日志，不属于 InfoStation）
 const todayLine = ref('');
 
-async function load() {
+async function load({ autoGenerate = false } = {}) {
   loading.value = true;
   try {
     const [res, doneRes] = await Promise.all([
@@ -44,13 +44,29 @@ async function load() {
     suggestions.value = res.suggestions || [];
     eyewash.value = res.eyewash || null;
     doneList.value = doneRes.suggestions || [];
+
+    // 主动推动的第一层含义：打开就该有东西看。
+    // 本地没有待处理推荐时自动生成一次（服务端有"当日已生成则不重复"的幂等保护）。
+    if (autoGenerate && !suggestions.value.length) {
+      generating.value = true;
+      try {
+        await generatePush(false);
+        const fresh = await fetchPush({ status: 'new' });
+        suggestions.value = fresh.suggestions || [];
+        eyewash.value = fresh.eyewash || eyewash.value;
+      } catch {
+        /* 自动生成失败不打断页面，用户仍可手动点「重新看看」 */
+      } finally {
+        generating.value = false;
+      }
+    }
   } catch (e) {
     toastError(e.message);
   } finally {
     loading.value = false;
   }
 }
-onMounted(load);
+onMounted(() => load({ autoGenerate: true }));
 useLiveReload(load, ['push', 'items', 'todos']);
 
 const eyewashCard = computed(() => suggestions.value.find((s) => s.kind === 'eyewash') || null);
