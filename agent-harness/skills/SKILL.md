@@ -23,7 +23,7 @@ pip install git+https://github.com/samlaying/infostation.git#subdirectory=agent-
 
 **Prerequisites:**
 - Python 3.8+
-- InfoStation 服务运行中（本地 `npm run dev` 或线上 http://<服务器IP>:3000）
+- InfoStation 服务运行中（本地 `npm run dev` 或线上自部署实例）
 - 服务端配置了 `API_TOKEN` 时需要 token（见下）
 
 ## Configuration

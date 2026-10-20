@@ -65,14 +65,14 @@ LLM_MODEL=deepseek-chat
 
 ## Agent API（让本机 Agent 操作网页端的一切）
 
-线上实例已启用鉴权。任意 OpenAI 兼容 Agent / CLI / 脚本均可通过 REST API 完成网页全部操作：
+任意 OpenAI 兼容 Agent / CLI / 脚本均可通过 REST API 完成网页全部操作（下述以本机 `http://localhost:3000` 为例，远程实例替换为对应地址，并启用 `API_TOKEN` 鉴权）：
 
 ```bash
 # 1. 能力自发现（推荐 Agent 首先调用）：返回全部端点+参数+枚举
-curl -H "Authorization: Bearer $TOKEN" http://<服务器IP>:3000/api/v1/agent/capabilities
+curl -H "Authorization: Bearer $TOKEN" http://localhost:3000/api/v1/agent/capabilities
 
 # 2. 例如录入处理
-curl -X POST http://<服务器IP>:3000/api/v1/process \
+curl -X POST http://localhost:3000/api/v1/process \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"content":"一段文字或URL"}'
 ```
@@ -135,12 +135,12 @@ npm run seed              # 重新灌示例数据
 
 ## 生产部署（RackNerd）
 
-已部署至 **http://<服务器IP>:3000**（`racknerd-7f2ba7a`，Node v22.22.2）：
+部署于 RackNerd VPS（Node v22.22.2）：
 
 - 目录：`/root/infostation/`（server + client/dist）
 - 进程：systemd 单元 `infostation.service`（开机自启，`systemctl restart infostation` 重启）
 - 形态：Express 同时伺服 API 与前端静态文件（SPA 回退），单端口 3000
-- LLM：本机代理 `http://127.0.0.1:7863/v1` · 模型 `cn:glm-5.3-flash`（Key 在服务器 `server/.env`，源于 `/root/workbuddy2api/config.json` 的 `api_key`）
+- LLM：OpenAI 兼容接口（如服务器本机代理 `http://127.0.0.1:7863/v1` · 模型 `cn:glm-5.3-flash`），Key 在服务器 `server/.env`
 
 更新部署：本地 `npm --prefix client run build` 后
 
